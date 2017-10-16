@@ -44,134 +44,163 @@ re_requiresplit = re.compile('([^<>=]*)([<>]?=.*)')
 re_setupfile = re.compile('setup\s*\(')
 re_setupimport = re.compile('^(\s*)(from\s+(setuptools|distutils.core)\s+import.*setup(,|$)|import\s+(setuptools|distutils.core))')
 
-def get_package(modulename, version=None, template='/tmp/templates/spec.jinja2', buildername='J. Doe', buildermail='j.doe@example.com'):
-    if version:
-        url="https://pypi.python.org/pypi?:action=doap&name={0}&version={1}".format(modulename, version)
-    else:
-        url="https://pypi.python.org/pypi?:action=doap&name={0}".format(modulename)
-    handler = urlopen(url)
-    xmlkeyvals=xmltodict.parse(handler.read())
-    xmlkeyvals=xmlkeyvals['rdf:RDF']['Project']
-    if not version:
-        version = xmlkeyvals['release']['Version']['revision']
+class pythonModuleException(Exception):
+    pass
 
-    pck = { 'name': modulename, 'version': version}
-    pck['url'] = downloadpage(modulename, version)
-    pck['filename'] = os.path.basename(pck['url'])
-    pck['filename'] = pck['filename'].split('#')[0]
-    pck['path'] = os.path.expanduser('~/rpmbuild/SOURCES/'+pck['filename'])
+class python_module(dict):
+    def __init__(self, **kwargs):
+        if not 'modulename' in kwargs:
+            raise pythonModuleException('modulename is the only required argument')
+        for arg in kwargs:
+            self[arg] = kwargs[arg]
 
-    if not os.path.exists(pck['path']):
-        urlretrieve(pck['url'], pck['path'])
-    modulepath = '/tmp/{0}-{1}'.format(modulename, version)
-    setupconfigfilepath = '{0}/writesetupconfig.py'.format(modulepath, modulename)
-    setupconfigjsonpath = '{0}/writesetupconfig.json'.format(modulepath, modulename)
-    if not os.path.exists(modulepath):
-        tar = tarfile.open(pck['path'], mode='r:gz')
-        tar.extractall(path="/tmp")
-    if not os.path.exists(setupconfigfilepath):
-        setupfile = open('{0}/setup.py'.format(modulepath), 'rb')
-        setupconfigfile = open(setupconfigfilepath, 'w')
-        for l in setupfile:
-            l=l.decode('ascii', 'ignore')
-            l = re_setupfile.sub('writesetupconfig(',l)
-            setupconfigfile.write(l)
-            m = re_setupimport.search(l)
-            if m:
-                indent = m.group(1)
-                for scriptline in setupconfigfilescript.format(setupconfigjsonpath).split('\n'):
-                    setupconfigfile.write(indent+scriptline+'\n')
-        setupfile.close()
-        setupconfigfile.close()
-    if not os.path.exists(setupconfigjsonpath):
-        writer = subprocess.Popen(['python', '{0}/writesetupconfig.py'.format(modulepath)], cwd=modulepath)
-        writer.wait()
+    def version(self):
+        if not 'version' in self:
+            doap=self.get_doap()
+            self['version'] = doap['release']['Version']['revision']
+        return self['version'] 
 
-    setupconfig = open(setupconfigjsonpath).read()
-    if not len(setupconfig):
-        raise Exception('Error getting setupconfig for {0} - {1}. {2} contains no data...'.format(modulename, version, setupconfigjsonpath))
-    setupconfig = json.loads(open(setupconfigjsonpath).read())
+    def get_doap(self):
+        if not 'doap' in self:
+            if 'version' in self:
+                url="https://pypi.python.org/pypi?:action=doap&name={0}&version={1}".format(self['modulename'], self['version'])
+            else:
+                url="https://pypi.python.org/pypi?:action=doap&name={0}".format(self['modulename'])
+            self['doapurl'] = url
+            handler = urlopen(url)
+            xmlkeyvals=xmltodict.parse(handler.read())
+            self['doap']=xmlkeyvals['rdf:RDF']['Project']
+        return self['doap']
 
-    try:
-        pck['requires'] = setupconfig['install_requires']
-    except:
-        pck['requires'] = []
-
-    pck['summary'] = xmlkeyvals['shortdesc']
-    if 'long_description' in setupconfig:
-        pck['description'] = description_sanitizer(setupconfig['long_description'])
-    else:
-        pck['description'] = description_sanitizer(setupconfig['description'])
-    pck['spec'] = os.path.expanduser('~/rpmbuild/SPECS/{0}-{1}.spec'.format(modulename, version))
-    pck['date'] = datetime.now().strftime('%a %b %-d %Y')
-    pck['buildername'] = buildername
-    pck['buildermail'] = buildermail
-    pck['license'] = setupconfig['license']
-
-    if not os.path.exists(pck['spec']):
-        templatepath = os.path.dirname(template)
-        templatefile = os.path.basename(template)
-        env = Environment(
-            loader = FileSystemLoader(templatepath),
-            autoescape=select_autoescape(['html', 'xml'])
-        )
-        template = env.get_template(templatefile)
-        spec=open(pck['spec'], 'w')
-        spec.write(template.render(pck))
-        spec.close()
-
-    return pck
-
-def module_versions(modulename):
-    versionsurl = 'https://pypi.org/project/{0}/#history'.format(modulename)
-    versionshandler = urlopen(versionsurl)
-    versionsroot = fromstring(versionshandler.read())
-    for div in versionsroot.find_class("release__version"):
-        for l in div.iterlinks():
-            yield(l[0].text)
-
-def downloadpage(modulename, version):
-    dlpageurl = 'https://pypi.python.org/pypi/{0}/{1}'.format(modulename, version)
-    dlpagehandler = urlopen(dlpageurl)
-    dlpageroot = fromstring(dlpagehandler.read())
-    tablerows = dlpageroot.xpath("//tr")
-    for tr in tablerows:
+    def download_package(self):
+        pck = { 'name': modulename, 'version': version}
+        pck['url'] = downloadpage(modulename, version)
+        pck['filename'] = os.path.basename(self.['url'])
+        pck['filename'] = pck['filename'].split('#')[0]
+        pck['path'] = os.path.expanduser('~/rpmbuild/SOURCES/'+pck['filename'])
+    
+        if not os.path.exists(pck['path']):
+            urlretrieve(pck['url'], pck['path'])
+        modulepath = '/tmp/{0}-{1}'.format(modulename, version)
+        setupconfigfilepath = '{0}/writesetupconfig.py'.format(modulepath, modulename)
+        setupconfigjsonpath = '{0}/writesetupconfig.json'.format(modulepath, modulename)
+        if not os.path.exists(modulepath):
+            tar = tarfile.open(pck['path'], mode='r:gz')
+            tar.extractall(path="/tmp")
+        if not os.path.exists(setupconfigfilepath):
+            setupfile = open('{0}/setup.py'.format(modulepath), 'rb')
+            setupconfigfile = open(setupconfigfilepath, 'w')
+            for l in setupfile:
+                l=l.decode('ascii', 'ignore')
+                l = re_setupfile.sub('writesetupconfig(',l)
+                setupconfigfile.write(l)
+                m = re_setupimport.search(l)
+                if m:
+                    indent = m.group(1)
+                    for scriptline in setupconfigfilescript.format(setupconfigjsonpath).split('\n'):
+                        setupconfigfile.write(indent+scriptline+'\n')
+            setupfile.close()
+            setupconfigfile.close()
+        if not os.path.exists(setupconfigjsonpath):
+            writer = subprocess.Popen(['python', '{0}/writesetupconfig.py'.format(modulepath)], cwd=modulepath)
+            writer.wait()
+    
+        setupconfig = open(setupconfigjsonpath).read()
+        if not len(setupconfig):
+            raise Exception('Error getting setupconfig for {0} - {1}. {2} contains no data...'.format(modulename, version, setupconfigjsonpath))
+        setupconfig = json.loads(open(setupconfigjsonpath).read())
+    
         try:
-            tablecols = tr.xpath("td")
-            dlurl = tablecols[0].xpath("span/a")[0].attrib['href']
-            dltype = tablecols[1].text.strip()
-            if dltype == 'Source':
-                return dlurl
+            pck['requires'] = setupconfig['install_requires']
         except:
-            pass
-    return None
-
-def description_sanitizer(desc):
-    desc=desc.encode('ascii', 'ignore').decode()
-    tag_re = re.compile(':[a-z]+:')
-    empty_re = re.compile('^\s*$')
-    empty_count = 0
-    ret = []
-    for l in desc.split('\n'):
-        if '-----' in l:
-            ret = ret[:-1]
-            break
-        elif '>>>' in l:
-            pass
-        elif '===' in l:
-            pass
-        elif '::' in l:
-            pass
-        elif tag_re.search(l):
-            pass
-        elif empty_re.search(l):
-            empty_count += 1
-            if empty_count == 1:
-                ret.append(l)
+            pck['requires'] = []
+    
+        pck['summary'] = xmlkeyvals['shortdesc']
+        if 'long_description' in setupconfig:
+            pck['description'] = description_sanitizer(setupconfig['long_description'])
         else:
-            empty_count = 0
-            ret.append(l)
-    return '\n'.join(ret)
+            pck['description'] = description_sanitizer(setupconfig['description'])
+        pck['spec'] = os.path.expanduser('~/rpmbuild/SPECS/{0}-{1}.spec'.format(modulename, version))
+        pck['date'] = datetime.now().strftime('%a %b %-d %Y')
+        pck['buildername'] = buildername
+        pck['buildermail'] = buildermail
+        pck['license'] = setupconfig['license']
+    
+        if not os.path.exists(pck['spec']):
+            templatepath = os.path.dirname(template)
+            templatefile = os.path.basename(template)
+            env = Environment(
+                loader = FileSystemLoader(templatepath),
+                autoescape=select_autoescape(['html', 'xml'])
+            )
+            template = env.get_template(templatefile)
+            spec=open(pck['spec'], 'w')
+            spec.write(template.render(pck))
+            spec.close()
+    
+        return pck
+    
+    def module_versions(self):
+        if 'versions' in self:
+            versions = self['versions']
+        else:
+            self['versionsurl'] = url = 'https://pypi.org/project/{0}/#history'.format(self['modulename'])
+            handler = urlopen(url)
+            root = fromstring(handler.read())
+            self['versions'] = versions = []
+            for div in sroot.find_class("release__version"):
+                for l in div.iterlinks():
+                    versions.append(l[0].text)
+        for v in versions
+            yield(v)
+    
+    def downloadpage(self):
+        if not 'moduleurl' in self:
+            dlpageurl = 'https://pypi.python.org/pypi/{0}/{1}'.format(self['modulename'], self.version())
+            dlpagehandler = urlopen(dlpageurl)
+            dlpageroot = fromstring(dlpagehandler.read())
+            tablerows = dlpageroot.xpath("//tr")
+            for tr in tablerows:
+                try:
+                    tablecols = tr.xpath("td")
+                    dlurl = tablecols[0].xpath("span/a")[0].attrib['href']
+                    dltype = tablecols[1].text.strip()
+                    if dltype == 'Source':
+                        self['moduleurl'] = dlurl
+                        break
+                except:
+                    pass
+        try:
+            return self['moduleurl']
+        except:
+            return None
+    
+    def description_sanitizer(self, desc):
+        desc=desc.encode('ascii', 'ignore').decode()
+        tag_re = re.compile(':[a-z]+:')
+        empty_re = re.compile('^\s*$')
+        empty_count = 0
+        ret = []
+        for l in desc.split('\n'):
+            if '-----' in l:
+                ret = ret[:-1]
+                break
+            elif '>>>' in l:
+                pass
+            elif '===' in l:
+                pass
+            elif '::' in l:
+                pass
+            elif tag_re.search(l):
+                pass
+            elif empty_re.search(l):
+                empty_count += 1
+                if empty_count == 1:
+                    ret.append(l)
+            else:
+                empty_count = 0
+                ret.append(l)
+        return '\n'.join(ret)
 
 parser = argparse.ArgumentParser(description='Generate a spec file for a python module')
 parser.add_argument('-p', '--package', required=True, help='The python package to generate a spec for')
