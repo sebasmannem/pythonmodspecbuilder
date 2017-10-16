@@ -1,0 +1,43 @@
+%global modname  {{name}}
+%global modname2 {{name|lower}}
+
+Summary: 	{{summary}}
+Name: 		python%{python3_pkgversion}-%{modname2}
+Version: 	{{version}}
+Release: 	1%{?dist}
+License: 	{{license}}
+Group: 		Development/Libraries
+Url: 		https://pypi.python.org/pypi/%{modname}
+Source0:        %{modname}-%{version}.tar.gz
+BuildRoot: 	%{_tmppath}/%{name}-%{version}-%{release}-buildroot-%(%{__id_u} -n)
+BuildArch: 	noarch
+{% for req in requires %}Requires:       python%{python3_pkgversion}-{{req}}
+{% endfor%}
+BuildRequires:  python%{python3_pkgversion}-devel
+BuildRequires:  python%{python3_pkgversion}-setuptools
+
+%description
+{{description}}
+
+%prep
+%setup -n %{modname}-%{version} -q
+
+%build
+%py3_build
+
+%install
+%py3_install
+
+%clean
+rm -rf $RPM_BUILD_ROOT
+
+%files
+%defattr(-,root,root)
+%{python3_sitelib}/%{modname}-%{version}-py%{python3_version}.egg-info
+%{python3_sitelib}/%{modname}
+
+%changelog
+* {{date}} - {{buildername}} <{{buildermail}}>
+- Initial build of this spec
+* Mon Oct 9 2017 - Sebastiaan Mannem <sebas@mannem.nl>
+- Template
