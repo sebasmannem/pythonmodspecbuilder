@@ -48,11 +48,17 @@ class pythonModuleException(Exception):
     pass
 
 class python_module(dict):
-    def __init__(self, **kwargs):
-        if not 'modulename' in kwargs:
-            raise pythonModuleException('modulename is the only required argument')
+    def __init__(self, *args, **kwargs):
+        for arg in args:
+            if isinstance(arg, dict):
+                for k in arg:
+                    self[k] = arg[k]
         for arg in kwargs:
             self[arg] = kwargs[arg]
+        try:
+            self.modulename = self['modulename']
+        except KeyError:
+            raise pythonModuleException('You didn\'t specify modulename')
 
     def version(self):
         try:
@@ -65,41 +71,55 @@ class python_module(dict):
         return version
 
     def get_doap(self):
-        if not 'doap' in self:
+        try:
+            doap = self['doap']
+        except:
+            doap = None
+        if not doap:
             if 'version' in self:
                 url="https://pypi.python.org/pypi?:action=doap&name={0}&version={1}".format(self['modulename'], self['version'])
             else:
                 url="https://pypi.python.org/pypi?:action=doap&name={0}".format(self['modulename'])
             self['doapurl'] = url
             handler = urlopen(url)
-            xmlkeyvals=xmltodict.parse(handler.read())
-            self['doap']=xmlkeyvals['rdf:RDF']['Project']
-        return self['doap']
+            xmlkeyvals = xmltodict.parse(handler.read())
+            doap = self['doap'] = xmlkeyvals['rdf:RDF']['Project']
+        return doap
 
     def download_source(self):
-        if not os.path.exists(self['sourcepath']):
-            url = downloadpage(self['modulename'], self.version())
-            self['source'] = os.path.basename(url)
-            filename = self['source'].split('#')[0]
-            self['sourcepath'] = os.path.expanduser('~/rpmbuild/SOURCES/'+filename)
-            urlretrieve(url, self['sourcepath'])
-        return self['sourcepath']
+        try:
+            sourcepath=self['sourcepath']
+        except:
+            sourcepath=None
+        if not sourcepath:
+            url = self.downloadpage()
+            source = self['source'] = os.path.basename(url)
+            filename = source.split('#')[0]
+            sourcepath = self['sourcepath'] = os.path.expanduser('~/rpmbuild/SOURCES/'+filename)
+        if not os.path.exists(sourcepath):
+            urlretrieve(url, sourcepath)
+        return sourcepath
 
     def extract_source(self):
         sourcepath = self.download_source()
-        self['extractedpath'] = '/tmp/{0}-{1}'.format(self['modulename'], self.version())
-        if not os.path.exists(self['extractedpath']):
+        try:
+            extractedpath = self['extractedpath']
+        except:
+            extractedpath = None
+        if not extractedpath:
+            extractedpath = self['extractedpath'] = '/tmp/{0}-{1}'.format(self['modulename'], self.version())
+        if not os.path.exists(extractedpath):
             tar = tarfile.open(sourcepath, mode='r:gz')
             tar.extractall(path="/tmp")
-        return self['extractedpath']
+        return extractedpath
 
     def get_setupconfig(self):
         extractedpath = self.extract_source()
         setupconfigfilepath = '{0}/writesetupconfig.py'.format(extractedpath, self['modulename'])
-        setupconfigjsonpath = '{0}/writesetupconfig.json'.format(extracted, self['modulename'])
+        setupconfigjsonpath = '{0}/writesetupconfig.json'.format(extractedpath, self['modulename'])
 
         if not os.path.exists(setupconfigfilepath):
-            setupfile = open('{0}/setup.py'.format(modulepath), 'rb')
+            setupfile = open('{0}/setup.py'.format(extractedpath), 'rb')
             setupconfigfile = open(setupconfigfilepath, 'w')
             for l in setupfile:
                 l=l.decode('ascii', 'ignore')
@@ -114,25 +134,26 @@ class python_module(dict):
             setupconfigfile.close()
 
         if not os.path.exists(setupconfigjsonpath):
-            writer = subprocess.Popen(['python', '{0}/writesetupconfig.py'.format(modulepath)], cwd=modulepath)
+            writer = subprocess.Popen(['python', '{0}/writesetupconfig.py'.format(extractedpath)], cwd=extractedpath)
             writer.wait()
 
         if not 'setupconfig' in self:
             setupconfig = open(setupconfigjsonpath).read()
             if not len(setupconfig):
                 raise pythonModuleException('Error getting setupconfig for {0} - {1}. {2} contains no data...'.format(self['modulename'], self.version(), setupconfigjsonpath))
-            self.['setupconfig'] = json.loads(open(setupconfigjsonpath).read())
-        return self.['setupconfig']
+            self['setupconfig'] = json.loads(open(setupconfigjsonpath).read())
+        return self['setupconfig']
 
     def requires(self):
         config = self.get_setupconfig()
-        if not 'install_requires' in config:
+        try:
+            return config['install_requires']
+        except:
             return []
-        return config['install_requires']
    
     def generate_spec(self, templatepath):
         doap = self.get_doap()
-        config = self.get_config()
+        config = self.get_setupconfig()
         if 'summary' not in self:
             self['summary'] = doap['shortdesc']
         try:
@@ -157,21 +178,28 @@ class python_module(dict):
             spec.close()
 
     def module_versions(self):
-        if 'versions' in self:
+        try:
             versions = self['versions']
-        else:
+        except:
+            versions = None
+        if not versions:
             self['versionsurl'] = url = 'https://pypi.org/project/{0}/#history'.format(self['modulename'])
             handler = urlopen(url)
             root = fromstring(handler.read())
-            self['versions'] = versions = []
+            versions = self['versions'] = []
             for div in sroot.find_class("release__version"):
                 for l in div.iterlinks():
                     versions.append(l[0].text)
-        for v in versions
+        for v in versions:
             yield(v)
     
     def downloadpage(self):
-        if not 'sourceurl' in self:
+        try:
+            sourceurl = self['sourceurl']
+        except:
+            sourceurl = None
+
+        if not sourceurl:
             dlpageurl = 'https://pypi.python.org/pypi/{0}/{1}'.format(self['modulename'], self.version())
             dlpagehandler = urlopen(dlpageurl)
             dlpageroot = fromstring(dlpagehandler.read())
@@ -182,16 +210,15 @@ class python_module(dict):
                     dlurl = tablecols[0].xpath("span/a")[0].attrib['href']
                     dltype = tablecols[1].text.strip()
                     if dltype == 'Source':
-                        self['sourceurl'] = dlurl
+                        sourceurl = self['sourceurl'] = dlurl
                         break
                 except:
                     pass
-        try:
-            return self['sourceurl']
-        except:
-            return None
+        if not sourceurl:
+            raise pythonModuleException('Could not detect source url')
+        return sourceurl
     
-def description_sanitizer(self, desc):
+def description_sanitizer(desc):
     desc=desc.encode('ascii', 'ignore').decode()
     tag_re = re.compile(':[a-z]+:')
     empty_re = re.compile('^\s*$')
