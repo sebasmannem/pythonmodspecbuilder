@@ -77,9 +77,9 @@ class python_module(dict):
             doap = None
         if not doap:
             if 'version' in self:
-                url="https://pypi.python.org/pypi?:action=doap&name={0}&version={1}".format(self['modulename'], self['version'])
+                url="https://pypi.python.org/pypi?:action=doap&name={0}&version={1}".format(self.modulename, self['version'])
             else:
-                url="https://pypi.python.org/pypi?:action=doap&name={0}".format(self['modulename'])
+                url="https://pypi.python.org/pypi?:action=doap&name={0}".format(self.modulename)
             self['doapurl'] = url
             handler = urlopen(url)
             xmlkeyvals = xmltodict.parse(handler.read())
@@ -107,7 +107,7 @@ class python_module(dict):
         except:
             extractedpath = None
         if not extractedpath:
-            extractedpath = self['extractedpath'] = '/tmp/{0}-{1}'.format(self['modulename'], self.version())
+            extractedpath = self['extractedpath'] = '/tmp/{0}-{1}'.format(self.modulename, self.version())
         if not os.path.exists(extractedpath):
             tar = tarfile.open(sourcepath, mode='r:gz')
             tar.extractall(path="/tmp")
@@ -115,8 +115,8 @@ class python_module(dict):
 
     def get_setupconfig(self):
         extractedpath = self.extract_source()
-        setupconfigfilepath = '{0}/writesetupconfig.py'.format(extractedpath, self['modulename'])
-        setupconfigjsonpath = '{0}/writesetupconfig.json'.format(extractedpath, self['modulename'])
+        setupconfigfilepath = '{0}/writesetupconfig.py'.format(extractedpath, self.modulename)
+        setupconfigjsonpath = '{0}/writesetupconfig.json'.format(extractedpath, self.modulename)
 
         if not os.path.exists(setupconfigfilepath):
             setupfile = open('{0}/setup.py'.format(extractedpath), 'rb')
@@ -140,18 +140,26 @@ class python_module(dict):
         if not 'setupconfig' in self:
             setupconfig = open(setupconfigjsonpath).read()
             if not len(setupconfig):
-                raise pythonModuleException('Error getting setupconfig for {0} - {1}. {2} contains no data...'.format(self['modulename'], self.version(), setupconfigjsonpath))
+                raise pythonModuleException('Error getting setupconfig for {0} - {1}. {2} contains no data...'.format(self.modulename, self.version(), setupconfigjsonpath))
             self['setupconfig'] = json.loads(open(setupconfigjsonpath).read())
         return self['setupconfig']
 
     def requires(self):
         config = self.get_setupconfig()
         try:
-            return config['install_requires']
+            for req in config['install_requires']:
+                m = re_requiresplit.match(req)
+                if m:
+                    name  = m.group(1)
+                    versions = m.group(2).split(',')
+                else:
+                    name = req
+                    versions = []
+                yield name.strip(), versions
         except:
-            return []
+            pass
    
-    def generate_spec(self, templatepath):
+    def generate_spec(self, templatepath=None):
         doap = self.get_doap()
         config = self.get_setupconfig()
         if 'summary' not in self:
@@ -160,10 +168,15 @@ class python_module(dict):
             self['description'] = description_sanitizer(config['long_description'])
         except KeyError:
             self['description'] = description_sanitizer(config['description'])
-        self['spec'] = os.path.expanduser('~/rpmbuild/SPECS/{0}-{1}.spec'.format(self['modulename'], self.version()))
+        self['spec'] = os.path.expanduser('~/rpmbuild/SPECS/{0}-{1}.spec'.format(self.modulename, self.version()))
         self['date'] = datetime.now().strftime('%a %b %-d %Y')
         self['license'] = config['license']
-        self['template'] = templatepath
+        if not templatepath:
+            try:
+                templatepath = self['template']
+            except:
+                raise pythonModuleException('Please specify a jinja template to generate spec from.')
+        self['requires'] = self.requires()
     
         if not os.path.exists(self['spec']):
             templatedir = os.path.dirname(templatepath)
@@ -183,7 +196,7 @@ class python_module(dict):
         except:
             versions = None
         if not versions:
-            self['versionsurl'] = url = 'https://pypi.org/project/{0}/#history'.format(self['modulename'])
+            self['versionsurl'] = url = 'https://pypi.org/project/{0}/#history'.format(self.modulename)
             handler = urlopen(url)
             root = fromstring(handler.read())
             versions = self['versions'] = []
@@ -200,7 +213,7 @@ class python_module(dict):
             sourceurl = None
 
         if not sourceurl:
-            dlpageurl = 'https://pypi.python.org/pypi/{0}/{1}'.format(self['modulename'], self.version())
+            dlpageurl = 'https://pypi.python.org/pypi/{0}/{1}'.format(self.modulename, self.version())
             dlpagehandler = urlopen(dlpageurl)
             dlpageroot = fromstring(dlpagehandler.read())
             tablerows = dlpageroot.xpath("//tr")
@@ -245,6 +258,25 @@ def description_sanitizer(desc):
             ret.append(l)
     return '\n'.join(ret)
 
+def download_modules_recursive(modulename, moduleversion = None, args={}):
+    modargs = {}
+    ret = {}
+    for arg in args:
+        modargs[arg] = args[arg]
+    modargs['modulename'] = modulename
+    if moduleversion:
+        modargs['version'] = moduleversion    
+    mod = python_module(modargs)
+    if not moduleversion:
+        moduleversion = mod.version()
+    key = (modulename, moduleversion)
+    ret[key] = mod
+    for submodinfo in mod.requires():
+        mods = download_modules_recursive(modulename = submodinfo[0], args = args)
+        for k in mods:
+            ret[k] = mods[k]
+    return ret
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Generate a spec file for a python module')
     parser.add_argument('-p', '--package', required=True, help='The python package to generate a spec for')
@@ -261,13 +293,13 @@ if __name__ == "__main__":
     
     template = os.path.abspath(os.path.expanduser(options.template))
     
-    modargs = {'modulename': options.package, 'buildername': options.buildername, 'buildermail': options.buildermail}
-    if options.version:
-        modargs['version'] = options.version
+    modargs = { 'buildername': options.buildername, 'buildermail': options.buildermail, 'template': template }
+    version = options.version
     
-    try:
-        mod = python_module(modargs)
-        mod.generate_spec(options.template)
-    except:
-        print('Error while building module', options)
-        print_exc()
+    mods = download_modules_recursive(options.package, version, modargs)
+    for k in mods:
+        try:
+            mods[k].generate_spec()
+        except:
+            print('Error while building module', k)
+            print_exc()
