@@ -230,7 +230,88 @@ class python_module(dict):
         if not sourceurl:
             raise pythonModuleException('Could not detect source url')
         return sourceurl
-    
+
+class versionException(Exception):
+    pass
+
+class version(str):
+    def cmp(self, other):
+        try:
+            myParts = self.split()
+            hisParts = other.split()
+            smallestlen = min(len(myParts), len(hisParts))
+        except:
+            raise versionException('''Seems {0} is'n a valuable component to compare to {1}'''.format(other.__repr__(), self.__repr__()))
+
+        i = 0
+        while True:
+            try:
+                mine = myParts[i]
+            except KeyError:
+                return -1
+            try:
+                his = hisParts[i]
+            except KeyError:
+                return -1
+            mineisstr = isinstance(mine, str)
+            hisisstr  = isinstance(his, str)
+            if mineisstr != hisisstr:
+                return cmp(mineisstr, hisisstr)
+            else:
+                comp = cmp(mine, his)
+                if comp:
+                    return comp
+            i+=1
+        return cmp(len(myParts), len(hisParts))
+
+    def split(self):
+        #Look at https://fedoraproject.org/wiki/Archive:Tools/RPM/VersionComparison for more info
+        letter, digit, other = 'l', 'd', 'o'
+        parts = []
+        previous_type = None
+        for c in self:
+            if c >= 'a' and c <= 'z' or c >= 'A' and i <= 'Z':
+                c_type = letter
+            elif c >= '0' and c <= '9':
+                c_type = digit
+            else:
+                c_type = other
+            if not previous_type:
+                #Processing first character
+                if c_type in [ letter, digit ]:
+                    part = c
+                else:
+                    #Seems to be that first character is not digit or letter.
+                    #Thats interesting. Well, anyway, lets skip this one and test next character
+                    continue
+            elif previous_type == other and c_type == other:
+                #Still in between parts
+                pass
+            elif previous_type == other:
+                #New part
+                part = c
+            elif c_type == previous_type:
+                #Current and previous characters are both letter or both digit
+                part += c
+            #elif c_type == other or c_type != previous_type:
+            else:
+                #end of part
+                if previous_type == digit:
+                    parts.append(int(part))
+                else:
+                    parts.append(part)
+                if c_type != other:
+                    part = c
+                else:
+                    part = ""
+            previous_type = c_type
+        if part:
+            if previous_type == digit:
+                parts.append(int(part))
+            else:
+                parts.append(part)
+        return tuple(parts)
+
 def description_sanitizer(desc):
     desc=desc.encode('ascii', 'ignore').decode()
     tag_re = re.compile(':[a-z]+:')
