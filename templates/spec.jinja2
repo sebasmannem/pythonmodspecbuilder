@@ -27,7 +27,6 @@ BuildRequires:  python%{python3_pkgversion}-setuptools
 
 %install
 %py3_install
-bash -c "find '$RPM_BUILDROOT' -name '__pycache__' | while read d; do rm -rf $d; done"
 
 %clean
 rm -rf $RPM_BUILD_ROOT
