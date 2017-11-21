@@ -346,7 +346,7 @@ class python_module(dict):
         for rpmval in ['%{python3_sitelib}', '%{python3_sitearch}', '%{python_sitelib}', '%{python_sitearch}', '%{_bindir}', '%{_libdir}']:
             path = self.rpmvalue(rpmval)
             replacers[path] = rpmval
-        sortedreplacers = sorted(replacers.keys(), key=len)
+        sortedreplacers = sorted(replacers.keys(), key=len, reverse=True)
         for dirname, subdirs, files in os.walk(buildroot):
             dirname = dirname[buildrootlen:]
             for replacer in sortedreplacers:
@@ -358,12 +358,16 @@ class python_module(dict):
                 dirname += '/'
             if '__pycache__' in dirname:
                 dirname = dirname.split('__pycache__')[0] + '__pycache__'
-                buildfilelist.add(dirname)
+                buildfilelist.add('%exclude ' + dirname)
+            elif 'debug' in dirname:
+                parts = dirname.split('debug')
+                dirname = parts[0] + 'debug' + parts[1].split('/')[0]
+                buildfilelist.add('%exclude ' + dirname)
             else:
                 for filename in files:
                     filefullpath = dirname + filename
                     if filename.endswith('.egg-info'):
-                        filefullpath ='%exclude ' + filefullpath
+                        filefullpath = '%exclude ' + filefullpath
                     buildfilelist.add(filefullpath)
         if len(buildfilelist.symmetric_difference(self['buildfilelist'])) > 0:
             self['buildfilelist'] = buildfilelist
