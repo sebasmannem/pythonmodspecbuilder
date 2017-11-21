@@ -193,12 +193,12 @@ class python_module(dict):
                         if requiresplitmatch:
                             name  = requiresplitmatch.group(1)
                             versions = []
-                            for v in requiresplitmatch.group(2).split(','):
-                                if '!=' in v:
+                            for version in requiresplitmatch.group(2).split(','):
+                                if '!=' in version:
                                     #!= isn't supported by rpmbuild. skip it.
                                     pass
                                 else:
-                                    limit_matches = re_limit.match(v).groups()
+                                    limit_matches = re_limit.match(version).groups()
                                     versions.append('{0} {1}'.format(*limit_matches))
                         else:
                             name = requirement
@@ -217,7 +217,14 @@ class python_module(dict):
                     m = re_requiresplit.match(line)
                     if m:
                         name  = m.group(1)
-                        versions = m.group(2).split(',')
+                        versions = []
+                        for version in  m.group(2).split(','):
+                            if '!=' in version:
+                                #!= isn't supported by rpmbuild. skip it.
+                                pass
+                            else:
+                                limit_matches = re_limit.match(version).groups()
+                                versions.append('{0} {1}'.format(*limit_matches))
                         versions = [ '{0} {1}'.format(*(re_limit.match(v).groups())) for v in versions ]
                     else:
                         name = line
@@ -248,10 +255,10 @@ class python_module(dict):
             self['description'] = ''
         self['spec'] = os.path.expanduser('~/rpmbuild/SPECS/{0}-{1}.spec'.format(self.modulename, self.version()))
         self['date'] = datetime.now().strftime('%a %b %-d %Y')
-        try:
-           self['license'] = config['license']
-        except:
-           self['license'] = ''
+        if 'license' in config:
+            self['license'] = config['license']
+        elif 'pypi_license' in self:
+            self['license'] = self['pypi_license']
         if not templatepath:
             try:
                 templatepath = self['template']
@@ -315,6 +322,14 @@ class python_module(dict):
                         break
                 except:
                     pass
+            #Workaround, get License from pypi web url
+            if not 'pypi_license' in self:
+                for a in dlpageroot.xpath("//a"):
+                    try:
+                        if a.text.startswith('License :: OSI Approved :: '):
+                            self['pypi_license'] = a.text.split('::')[-1].strip()
+                    except:
+                        pass
         if not sourceurl:
             raise pythonModuleException('Could not detect source url')
         return sourceurl
@@ -576,6 +591,7 @@ if __name__ == "__main__":
     parser.add_argument('-n', '--buildername', default='J. Doe', help='the name of the person who is building')
     parser.add_argument('-e', '--buildermail', default='jdoe@example.com', help='the jinja2 template to use')
     parser.add_argument('-b', '--build', action='store_true', help='Actually try to build the rpm')
+    parser.add_argument('-r', '--recursive', action='store_true', help='Also build rpms this module depends on')
 
     options = parser.parse_args()
     for subdir in [ 'SPECS', 'SOURCES' ]:
@@ -587,8 +603,13 @@ if __name__ == "__main__":
 
     modargs = { 'buildername': options.buildername, 'buildermail': options.buildermail, 'template': template, 'verbosity': options.verbose }
     version = options.version
-
-    mods = download_modules_recursive(options.package, version, modargs)
+    if options.recursive:
+        mods = download_modules_recursive(options.package, version, modargs)
+    else:
+        modargs['modulename'] = options.package
+        if version:
+            modargs['version'] = options.version
+        mods = { "options.package": python_module(modargs) }
     for k in mods:
         try:
             mods[k].generate_spec()
