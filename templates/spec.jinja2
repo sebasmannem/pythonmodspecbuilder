@@ -11,8 +11,8 @@ Url:		https://pypi.python.org/pypi/%{modname}
 Source0:	%{modname}-%{version}.tar.gz
 BuildRoot:	%{_tmppath}/%{name}-%{version}-%{release}-buildroot-%(%{__id_u} -n)
 BuildArch:	{{buildarch|default('noarch')}}
-{% for req in requires %}Requires:       python%{python3_pkgversion}-{{req}}
-{% endfor%}
+{% for req in requires %}{% for limit in req[1] %}Requires:       python%{python3_pkgversion}-{{req[0]}} {{limit}}
+{% endfor%}{% endfor%}
 BuildRequires:  python%{python3_pkgversion}-devel
 BuildRequires:  python%{python3_pkgversion}-setuptools
 

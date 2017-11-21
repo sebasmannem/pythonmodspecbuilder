@@ -42,6 +42,7 @@ def writesetupconfig(**kwargs):
 '''
 
 re_requiresplit = re.compile('^([^<>=!]*)([<>=!]+.*)')
+re_limit = re.compile('([<>=!]+) *(\S*)')
 re_setupfile = re.compile('(setuptools\.)?setup\s*\(')
 re_setupimport = re.compile('^(\s*)(from\s+(setuptools|distutils.core)\s+import.*setup(,|$)|import\s+(setuptools|distutils.core))')
 
@@ -183,20 +184,27 @@ class python_module(dict):
         extractedpath = self.extract_source()
         config = self.get_setupconfig()
         ret = {}
-        for req in ['install_requires']:
-            self.print_msg(3, 'Detecting '+req)
-            if req in config.keys():
-                for req in config[req]:
+        for require in ['install_requires']:
+            self.print_msg(3, 'Detecting '+require)
+            if require in config.keys():
+                for requirement in config[require]:
                     try:
-                        m = re_requiresplit.match(req)
-                        if m:
-                            name  = m.group(1)
-                            versions = m.group(2).split(',')
+                        requiresplitmatch = re_requiresplit.match(requirement)
+                        if requiresplitmatch:
+                            name  = requiresplitmatch.group(1)
+                            versions = []
+                            for v in requiresplitmatch.group(2).split(','):
+                                if '!=' in v:
+                                    #!= isn't supported by rpmbuild. skip it.
+                                    pass
+                                else:
+                                    limit_matches = re_limit.match(v).groups()
+                                    versions.append('{0} {1}'.format(*limit_matches))
                         else:
-                            name = req
+                            name = requirement
                             versions = []
                         ret[name.strip()] = versions
-                    except:
+                    except Exception as e:
                         pass
         try:
             requiresfilepath = os.path.join(extractedpath, self.modulename.replace('-', '_')+'.egg-info', 'requires.txt')
@@ -210,6 +218,7 @@ class python_module(dict):
                     if m:
                         name  = m.group(1)
                         versions = m.group(2).split(',')
+                        versions = [ '{0} {1}'.format(*(re_limit.match(v).groups())) for v in versions ]
                     else:
                         name = line
                         versions = []
@@ -249,8 +258,10 @@ class python_module(dict):
             except:
                 raise pythonModuleException('Please specify a jinja template to generate spec from.')
         self['requires'] = self.requires()
-        if not '' in self:
-            self['buildfilelist'] = [ '%{python3_sitearch}/%{modname}-%{version}-py%{python3_version}.egg-info', '%{python3_sitearch}/%{modname}']
+        if not 'buildfilelist' in self:
+            self['buildfilelist'] = buildfilelist = set()
+            buildfilelist.add('%exclude %{python3_sitelib}/%{modname}-%{version}-py%{python3_version}.egg-info')
+            buildfilelist.add('%{python3_sitelib}/%{modname}')
 
         if not os.path.exists(self['spec']):
             self.print_msg(1, 'Creating spec from template')
@@ -310,7 +321,7 @@ class python_module(dict):
 
     def rpmvalue(self, key):
         out, err = subprocess.Popen(['rpm', '-E', key], stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
-        return out
+        return out.decode().strip()
 
     def release(self):
         return self.rpmvalue(self['release'])
@@ -328,11 +339,9 @@ class python_module(dict):
             return os.path.expanduser('~/rpmbuild/BUILDROOT/{0}-{1}.{3}'.format(self.modulename, self.version(), self.release(), self.arch()))
 
     def createbuildfilelist(self):
-        if 'buildfilelist' in self:
-            return
         buildroot = self.buildroot()
         buildrootlen = len(buildroot)
-        self['buildfilelist'] = buildfilelist = []
+        buildfilelist = set()
         replacers = {}
         for rpmval in ['%{python3_sitelib}', '%{python3_sitearch}', '%{python_sitelib}', '%{python_sitearch}', '%{_bindir}', '%{_libdir}']:
             path = self.rpmvalue(rpmval)
@@ -347,8 +356,20 @@ class python_module(dict):
                 dirname = '/'
             if not dirname[-1] == '/':
                 dirname += '/'
-            for filename in files:
-                buildfilelist.append(dirname + filename)
+            if '__pycache__' in dirname:
+                dirname = dirname.split('__pycache__')[0] + '__pycache__'
+                buildfilelist.add(dirname)
+            else:
+                for filename in files:
+                    filefullpath = dirname + filename
+                    if filename.endswith('.egg-info'):
+                        filefullpath ='%exclude ' + filefullpath
+                    buildfilelist.add(filefullpath)
+        if len(buildfilelist.symmetric_difference(self['buildfilelist'])) > 0:
+            self['buildfilelist'] = buildfilelist
+            return True
+        else:
+            return False
 
     def build(self):
         if not 'spec' in self:
@@ -356,7 +377,19 @@ class python_module(dict):
         buildroot = self.buildroot()
         out, err = subprocess.Popen(['rpmspec', '--query', self['spec']], stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
         rpmlist = out.splitlines()
-        print(rpmlist)
+        if len(rpmlist):
+            done = True
+            for rpm in rpmlist:
+                rpmfile = os.path.expanduser('~/rpmbuild/RPMS/noarch/{0}.rpm'.format(rpm))
+                if os.path.exists(rpmfile):
+                    pass
+                elif os.path.exists(rpmfile.replace('noarch', 'x86_64')):
+                    pass
+                else:
+                    done = False
+                    break
+            if done:
+                return
         self.print_msg(1, 'Building rpm.')
         if self.verbosity >= 4:
             redirect = None
@@ -364,28 +397,31 @@ class python_module(dict):
             redirect = open(os.devnull, 'w')
         for stage in ['p', 'c', 'i', 'l', 'a']:
             try:
-                subprocess.check_call(['rpmbuild', '--buildroot={0}'.format(buildroot), '-b'+stage, self['spec']], stdout=redirect, stderr=redirect)
+                subprocess.check_call(['rpmbuild', '--short-circuit', '--buildroot={0}'.format(buildroot), '-b'+stage, self['spec']], stdout=redirect, stderr=redirect)
+                if stage == 'a':
+                    self.print_msg(0, 'Building rpm succesfully finished.'.format(stage))
             except Exception as e:
                 if stage == 'i':
                    corrected = False
                    #In this stage, two things might be the issue: The architecture could be other than noarch and the %files section could be off.
+                   corrected = self.createbuildfilelist()
                    if os.path.exists(os.path.join(buildroot, 'usr/lib64')) and self['spec_generated'] and self.arch() == 'noarch':
                        self['buildarch'] = 'x86_64'
                        corrected = True
-                   if not 'buildfilelist' in self:
-                       self.createbuildfilelist()
-                       corrected = True
                    if not corrected:
                        raise pythonModuleException('Building RPM Failed (no architecture change and no filelist change).')
+                       break
                    os.unlink(self['spec'])
                    self.generate_spec()
                    try:
                        subprocess.check_call(['rpmbuild', '--buildroot={0}'.format(buildroot), '-bi', self['spec']], stdout=redirect, stderr=redirect)
                    except:
                        raise pythonModuleException('Building RPM Failed (even after architecture change and/or filelist change).')
+                       break
                 else:
                     self.print_msg(0, 'Building rpm FAILED in stage {}.'.format(stage))
                     self.print_msg(2, e)
+                    break
         try:
             redirect.close()
         except:
@@ -524,7 +560,7 @@ def download_modules_recursive(modulename, moduleversion = None, args={}):
             for k in mods:
                 ret[k] = mods[k]
         except Exception as e:
-            print ('Exception coorurred while retrieving info on module {}'.format(submodinfo[0]))
+            print ('Exception occurred while retrieving info on module {}'.format(submodinfo[0]))
     return ret
 
 if __name__ == "__main__":
