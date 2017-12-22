@@ -1,5 +1,5 @@
-%global modname  {{modulename}}
-%global modname2 {{modulename|lower}}
+%global modname  {{realmodulename}}
+%global modname2 {{modulename}}
 
 Summary:	{{summary}}
 Name:		python%{python3_pkgversion}-%{modname2}
@@ -11,7 +11,7 @@ Url:		https://pypi.python.org/pypi/%{modname}
 Source0:	%{modname}-%{version}.tar.gz
 BuildRoot:	%{_tmppath}/%{name}-%{version}-%{release}-buildroot-%(%{__id_u} -n)
 BuildArch:	{{buildarch|default('noarch')}}
-{% for req in requires %}{% for limit in req[1] %}Requires:       python%{python3_pkgversion}-{{req[0]}} {{limit}}
+{% for req in requires %}{% for limit in req[1] %}Requires:       python%{python3_pkgversion}-{{req[0]|lower}} {{limit}}
 {% endfor%}{% endfor%}
 BuildRequires:  python%{python3_pkgversion}-devel
 BuildRequires:  python%{python3_pkgversion}-setuptools
@@ -33,11 +33,26 @@ rm -rf $RPM_BUILD_ROOT
 
 %files
 %defattr(-,root,root)
-{% for file in buildfilelist %}{{ file }}
+{% for chapter in buildfilelist %}
+{% if chapter != '%{_bindir}' %}#{{chapter}}
+{% for file in buildfilelist[chapter] %}{{ file }}
+{% endfor %}{% endif %}{% endfor %}
+
+{% if '%{_bindir}' in buildfilelist %}%package bin
+Requires: python%{python3_pkgversion}-%{modname2} = %{version}
+Requires: python%{python3_pkgversion}-setuptools
+Summary:  Binaries for {{summary}}
+
+%description bin
+{{description}}
+
+%files bin
+{% for file in buildfilelist['%{_bindir}'] %}{{ file }}
 {% endfor %}
+{% endif %}
 
 %changelog
 * {{date}} - {{buildername}} <{{buildermail}}>
 - Initial build of this spec
-* Mon Oct 9 2017 - Sebastiaan Mannem <sebas@mannem.nl>
-- Template
+* Tue Dec 5 2017 - Sebastiaan Mannem <smannem@bol.com>
+- Latest version of Spec template
