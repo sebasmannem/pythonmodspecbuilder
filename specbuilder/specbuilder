@@ -410,7 +410,11 @@ class python_module(dict):
             except:
                 mod_valid = True
             if mod_valid:
-                yield (k, ret[k])
+                if ret[k]:
+                    limits = ret[k]
+                else:
+                    limits = ['']
+                yield (k, limits)
 
     def print_msg(self, verbosity, msg):
         if verbosity <= self.verbosity:
@@ -448,7 +452,7 @@ class python_module(dict):
         if not 'buildfilelist' in self:
             self['buildfilelist'] = buildfilelist = {}
             buildfilelist['%{python3_sitelib}'] = buildfilesublist = set()
-            buildfilesublist.add('%exclude %{python3_sitelib}/%{modname}-%{version}-py%{python3_version}.egg-info')
+            buildfilesublist.add('%{python3_sitelib}/%{modname}-%{version}-py%{python3_version}.egg-info')
             buildfilesublist.add('%{python3_sitelib}/%{modname}')
 
         if not os.path.exists(self['spec']):
@@ -552,8 +556,6 @@ class python_module(dict):
             else:
                 for filename in files:
                     filefullpath = dirname + filename
-                    if filename.endswith('.egg-info'):
-                        filefullpath = '%exclude ' + filefullpath
                     buildfilesublist.add(filefullpath)
         newkeys = set(buildfilelist.keys())
         oldkeys = set(self['buildfilelist'])
