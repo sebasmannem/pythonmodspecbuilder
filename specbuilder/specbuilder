@@ -21,6 +21,7 @@ import subprocess
 import json
 from datetime import datetime
 import traceback
+import yaml
 
 setupconfigfilescript = '''
 def writesetupconfig(**kwargs):
@@ -124,7 +125,8 @@ class python_module(dict):
         except:
             versionlimits = None
 
-        for version in self.available_versions():
+        available_versions = [ v for v in self.available_versions()]
+        for version in available_versions:
             version_unfit = False
             if versionlimits:
                 for limit in versionlimits:
@@ -132,13 +134,16 @@ class python_module(dict):
                         version_unfit = True
                         break
                 if version_unfit:
-                    break
+                    continue
             if latestversion:
                 if latestversion.less_then(version):
                     continue
             latestversion = version
         if not latestversion:
-            raise pythonModuleException('No latest version fits to version limits')
+            for limit in versionlimits:
+                self.print_msg(4, 'versionlimit: ' + limit.__repr__())
+            self.print_msg(4, 'versions' + available_versions.__repr__())
+            raise pythonModuleException('No latest version fits to version limits {}'.format())
         self['latestversion'] = latestversion
 
         return latestversion
@@ -229,15 +234,25 @@ class python_module(dict):
             self.print_msg(2, 'Converting setup.py to writesetupconfig.py')
             setupfile = open('{0}/setup.py'.format(extractedpath), 'rb')
             setupconfigfile = open(setupconfigfilepath, 'w')
+            added = False
+            content = []
             for l in setupfile:
                 l=l.decode('ascii', 'ignore')
                 l = re_setupfile.sub('writesetupconfig(',l)
-                setupconfigfile.write(l)
+                content.append(l)
                 m = re_setupimport.search(l.rstrip())
                 if m:
+                    added = True
                     indent = m.group(1)
                     for scriptline in setupconfigfilescript.format(setupconfigjsonpath).split('\n'):
-                        setupconfigfile.write(indent+scriptline+'\n')
+                        content.append(indent+scriptline+'\n')
+                        added = True
+            self.print_msg(4,'could not find setup import. adding writesetupconfig to the top of {}'.format(setupconfigfilepath))
+            for line in content:
+                if not added and line[0] != '#':
+                    setupconfigfile.write(setupconfigfilescript.format(setupconfigjsonpath)+'\n')
+                    added = True
+                setupconfigfile.write(line)
             setupfile.close()
             setupconfigfile.close()
 
@@ -342,13 +357,14 @@ class python_module(dict):
                 raise Exception('Unknown requirechapter type for {}'.format(requirechapter.__repr__()))
         for requirechapter in requires:
             try:
-                switch_value = self['switches'][requirechapter]
+                switch_value = self['requirechapters'][requirechapter]
             except:
                 if 'test' in requirechapter:
-                    switch_value = self['switches'][requirechapter] = False
+                    switch_value = self['requirechapters'][requirechapter] = False
                 else:
-                    switch_value = self['switches'][requirechapter] = True
+                    switch_value = self['requirechapters'][requirechapter] = True
             if not switch_value:
+                self.print_msg(4, 'Skipping {} because it is disabled in switchfile'.format(requirechapter))
                 continue
             for requirement in requires[requirechapter]:
                 try:
@@ -379,9 +395,9 @@ class python_module(dict):
                     if '[' in line:
                         switch_name = line.replace('[','').replace(']','')
                         try:
-                            switch_value = self['switches'][switch_name]
+                            switch_value = self['requirechapters'][switch_name]
                         except:
-                            switch_value = self['switches'][switch_name] = True
+                            switch_value = self['requirechapters'][switch_name] = True
                         continue
                     elif switch_value:
                         m = re_requiresplit.match(line)
@@ -402,6 +418,8 @@ class python_module(dict):
                         name = name.strip()
                         if name:
                             ret[name.strip()] = versions
+                    else:
+                        self.print_msg(4, 'Skipping {} because it is disabled in switchfile'.format(switch_name))
         except Exception as e:
             pass
         for k in ret:
@@ -703,7 +721,9 @@ class versionClass(str):
         return 0
 
     def split(self):
-        if not self.parts:
+        if not len(self):
+            self.parts = tuple()
+        elif not self.parts:
             #Look at https://fedoraproject.org/wiki/Archive:Tools/RPM/VersionComparison for more info
             letter, digit, other = 'l', 'd', 'o'
             parts = []
@@ -791,6 +811,10 @@ def download_modules_recursive(packages, args={}, recursive = False):
         for arg in args:
             modargs[arg] = args[arg]
         modargs['modulename'] = modulename
+        try:
+            modargs['extra_requires'] = args['extra_requires'][modulename]
+        except:
+            modargs['extra_requires'] = []
         if modulename in python_module.members:
             mod = python_module.members[modulename]
             ret[modulename] = mod
@@ -799,6 +823,10 @@ def download_modules_recursive(packages, args={}, recursive = False):
             ret[modulename] = mod
             if recursive:
                 for submodinfo in mod.requires():
+                    if submodinfo[0] in args['skip_builds']:
+                        if args['verbosity'] > 3:
+                            print('    Skippping {} because it is disabled in switchfile.'.format(submodinfo[0]))
+                        continue
                     try:
                         mods = download_modules_recursive(packages = [submodinfo], args = args, recursive = recursive)
                         for k in mods:
@@ -849,17 +877,29 @@ if __name__ == "__main__":
         if os.path.isfile(options.switchfile):
             if options.verbose > 1:
                 print('Reading switchfile {}'.format(options.switchfile))
-            switches = json.loads(open(options.switchfile).read())
 
-    modargs = { 'buildername': buildername, 'buildermail': options.buildermail, 'template': template, 'verbosity': options.verbose, 'switches': switches }
-    if options.version:
-        versions = options.version
-    else:
-        versions = [''] * len(options.package)
-    if len(versions) < len(options.package):
-        versions += [''] * len(options.package)
-    if len(versions) > len(options.package):
-        versions = versions[:len(options.package)]
+            try:
+                switches = yaml.load(open(options.switchfile))
+            except:
+                switches = json.loads(open(options.switchfile).read())
+
+    modargs = { 'buildername': buildername, 'buildermail': options.buildermail, 'template': template, 'verbosity': options.verbose }
+    for chapter in switches:
+        modargs[chapter] = switches[chapter]
+
+    versions = []
+    for i in range(len(options.package)):
+        try:
+            version = options.version[i]
+            if version[:2] in ['>=', '<=', '!=']:
+                pass
+            elif version[:1] in ['>', '<', '=']:
+                pass
+            else:
+                version = '='+version
+        except:
+            version = ''
+        versions.append([version])
     packages = zip(options.package, versions)
 
     print('Downloading modules: {}'.format(", ".join(options.package)))
@@ -887,7 +927,7 @@ if __name__ == "__main__":
                 traceback.print_exc()
 
     if options.switchfile:
-        if options.verbose > 1:
+        if options.verbose > 0:
             print('Writing switchfile {}'.format(options.switchfile))
-        open(options.switchfile, 'w').write(json.dumps(switches, sort_keys=True, indent=4, separators=(',', ': ')))
+        open(options.switchfile, 'w').write(yaml.dump(switches, default_flow_style=False ))
     sys.exit(len(builderrors) + len(specerrors))
