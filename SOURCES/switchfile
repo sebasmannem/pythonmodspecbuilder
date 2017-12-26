@@ -1,0 +1,65 @@
+require_chapters:
+  :(python_version<"3.3"): false
+  :platform_python_implementation != 'PyPy': true
+  :python_version != "3.3": true
+  :python_version < '3': false
+  :python_version == "3.3": false
+  :python_version<"2.7": false
+  :python_version<"3.5": true
+  :python_version<'3.2': false
+  :python_version<'3.4': false
+  :python_version=="2.6": false
+  :sys_platform!="win32": false
+  :sys_platform=="win32": false
+  all: true
+  all:platform_python_implementation == 'CPython': true
+  betamax: false
+  certs: true
+  chardet: true
+  crypto: true
+  cssselect: true
+  datrie:platform_python_implementation == 'CPython': true
+  docs: true
+  docs:(python_version<"3" or python_version>="3.3"): true
+  docs:(python_version<"3.3" and python_version>="3"): false
+  docstest: false
+  flake8: true
+  genshi: true
+  html5: true
+  html5lib: true
+  htmlsoup: true
+  i18n: true
+  install_requires: true
+  kerberos: true
+  keystone: true
+  lxml: true
+  lxml:platform_python_implementation == 'CPython': true
+  mssql_pymssql: false
+  mssql_pyodbc: false
+  mysql: false
+  oauth1: true
+  oracle: false
+  pep8test: false
+  plugin: true
+  postgresql: true
+  postgresql_pg8000: true
+  postgresql_psycopg2cffi: true
+  pymysql: false
+  requires: true
+  rsa: true
+  saml2: true
+  secure: true
+  security: true
+  setup_requires: true
+  signals: true
+  signedtoken: true
+  socks: true
+  socks:sys_platform == "win32" and (python_version == "2.7" or python_version == "2.6"): false
+  source: true
+  ssl:sys_platform=='win32': false
+  test: false
+  testing: false
+  tests_require: false
+  websupport: true
+skip_builds: {}
+extra_requires: {}

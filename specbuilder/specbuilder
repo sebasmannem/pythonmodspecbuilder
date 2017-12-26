@@ -357,12 +357,12 @@ class python_module(dict):
                 raise Exception('Unknown requirechapter type for {}'.format(requirechapter.__repr__()))
         for requirechapter in requires:
             try:
-                switch_value = self['requirechapters'][requirechapter]
+                switch_value = self['require_chapters'][requirechapter]
             except:
                 if 'test' in requirechapter:
-                    switch_value = self['requirechapters'][requirechapter] = False
+                    switch_value = self['require_chapters'][requirechapter] = False
                 else:
-                    switch_value = self['requirechapters'][requirechapter] = True
+                    switch_value = self['require_chapters'][requirechapter] = True
             if not switch_value:
                 self.print_msg(4, 'Skipping {} because it is disabled in switchfile'.format(requirechapter))
                 continue
@@ -395,9 +395,9 @@ class python_module(dict):
                     if '[' in line:
                         switch_name = line.replace('[','').replace(']','')
                         try:
-                            switch_value = self['requirechapters'][switch_name]
+                            switch_value = self['require_chapters'][switch_name]
                         except:
-                            switch_value = self['requirechapters'][switch_name] = True
+                            switch_value = self['require_chapters'][switch_name] = True
                         continue
                     elif switch_value:
                         m = re_requiresplit.match(line)
@@ -884,7 +884,9 @@ if __name__ == "__main__":
                 switches = json.loads(open(options.switchfile).read())
 
     modargs = { 'buildername': buildername, 'buildermail': options.buildermail, 'template': template, 'verbosity': options.verbose }
-    for chapter in switches:
+    for chapter in ['extra_requires', 'skip_builds', 'require_chapters']:
+        if chapter not in switches:
+            switches[chapter] = {}
         modargs[chapter] = switches[chapter]
 
     versions = []
