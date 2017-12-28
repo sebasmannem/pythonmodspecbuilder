@@ -3,7 +3,7 @@ set -e
 
 LOGFILE=/targetlogs/$(date +%s).log
 echo "Recording all output to $LOGFILE"
-exec 1>>${LOGFILE} 2>&1
+exec &> >(tee "$LOGFILE")
 
 
 mkdir -p ~/rpmbuild/SOURCES
