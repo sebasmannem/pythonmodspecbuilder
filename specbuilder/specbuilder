@@ -1,27 +1,27 @@
 #!/usr/bin/env python
-try:
-    #Python3
-    from urllib.request import urlopen, urlretrieve
-except:
-    #Python2
-    from urllib import urlretrieve
-    import urllib2
-    def urlopen(url):
-        request = urllib2.Request(url)
-        return urllib2.urlopen(request)
 import tarfile
 import zipfile
 import sys
 import os
 import re
 import argparse
-from jinja2 import Environment, select_autoescape, FileSystemLoader
-from lxml.html import fromstring
 import subprocess
 import json
-from datetime import datetime
 import traceback
 import yaml
+try:
+    #Python3
+    from urllib.request import urlopen, urlretrieve
+except:
+    #Python2
+    import urllib2
+    from urllib import urlretrieve
+    def urlopen(url):
+        request = urllib2.Request(url)
+        return urllib2.urlopen(request)
+from jinja2 import Environment, select_autoescape, FileSystemLoader
+from lxml.html import fromstring
+from datetime import datetime
 
 setupconfigfilescript = '''
 def writesetupconfig(**kwargs):
@@ -45,7 +45,7 @@ re_limit = re.compile('([<>=!]+) *(\S*)')
 re_setupfile = re.compile('(setuptools\.)?setup\s*\(')
 re_setupimport = re.compile('^(\s*)(from\s+(setuptools|distutils.core)\s+import.*setup(,|$)|import\s+(setuptools|distutils.core))')
 
-class pythonModuleException(Exception):
+class PythonModuleException(Exception):
     pass
 
 class python_module(dict):
@@ -60,7 +60,7 @@ class python_module(dict):
         try:
             self.modulename = self['modulename'].lower()
         except KeyError:
-            raise pythonModuleException('You didn\'t specify modulename')
+            raise PythonModuleException('You didn\'t specify modulename')
         try:
             self.verbosity = int(self['verbosity'])
         except:
@@ -86,22 +86,22 @@ class python_module(dict):
         version_objects = []
         for version in versions:
             if version[:2] == '>=':
-                version_object = versionClass(version[2:].strip())
+                version_object = VersionClass(version[2:].strip())
                 version_objects.append(version_object.greater_equal)
             elif version[:2] == '<=':
-                version_object = versionClass(version[2:].strip())
+                version_object = VersionClass(version[2:].strip())
                 version_objects.append(version_object.less_equal)
             elif version[:1] == '>':
-                version_object = versionClass(version[1:].strip())
+                version_object = VersionClass(version[1:].strip())
                 version_objects.append(version_object.greater_then)
             elif version[:1] == '<':
-                version_object = versionClass(version[1:].strip())
+                version_object = VersionClass(version[1:].strip())
                 version_objects.append(version_object.less_then)
             elif version[:1] == '=':
-                version_object = versionClass(version[1:].strip())
+                version_object = VersionClass(version[1:].strip())
                 version_objects.append(version_object.equal)
             elif version[:2] == '!=':
-                version_object = versionClass(version[2:].strip())
+                version_object = VersionClass(version[2:].strip())
                 version_objects.append(version_object.not_equal)
         try:
             self['versionlimits'] += version_objects
@@ -143,7 +143,7 @@ class python_module(dict):
             for limit in versionlimits:
                 self.print_msg(4, 'versionlimit: ' + limit.__repr__())
             self.print_msg(4, 'versions' + available_versions.__repr__())
-            raise pythonModuleException('No latest version fits to version limits {}'.format())
+            raise PythonModuleException('No latest version fits to version limits {}'.format())
         self['latestversion'] = latestversion
 
         return latestversion
@@ -161,7 +161,7 @@ class python_module(dict):
             versions = self['versions'] = []
             for div in root.find_class("release__version"):
                 for l in div.iterlinks():
-                    versions.append(versionClass(l[0].text))
+                    versions.append(VersionClass(l[0].text))
         for v in versions:
             yield(v)
 
@@ -217,7 +217,7 @@ class python_module(dict):
                     archive = zipfile.ZipFile(sourcepath, mode='r')
                 else:
                     print(file_extension_lower)
-                    raise pythonModuleException('Cannot extract {0} (unknown extension)'.format(sourcepath))
+                    raise PythonModuleException('Cannot extract {0} (unknown extension)'.format(sourcepath))
                 self.print_msg(1, 'Extracting sources from {0}'.format(sourcepath))
                 archive.extractall(path="/tmp")
             except:
@@ -265,7 +265,7 @@ class python_module(dict):
             self.print_msg(3, 'Reading setupconfig.json')
             setupconfig = open(setupconfigjsonpath).read()
             if not len(setupconfig):
-                raise pythonModuleException('Error getting setupconfig for {0} - {1}. {2} contains no data...'.format(self.modulename, self.latest_version(), setupconfigjsonpath))
+                raise PythonModuleException('Error getting setupconfig for {0} - {1}. {2} contains no data...'.format(self.modulename, self.latest_version(), setupconfigjsonpath))
             self['setupconfig'] = json.loads(open(setupconfigjsonpath).read())
         return self['setupconfig']
 
@@ -275,7 +275,7 @@ class python_module(dict):
         except:
             pass
         self.print_msg(3, 'Detecting python_requires')
-        python_version = versionClass('.'.join([ str(version) for version in sys.version_info]))
+        python_version = VersionClass('.'.join([ str(version) for version in sys.version_info]))
         config = self.get_setupconfig()
         try:
             requires = config['python_requires'].split(',')
@@ -286,32 +286,32 @@ class python_module(dict):
         for require in requires:
             require = require.strip()
             if require[:2] == '>=':
-                require_object = versionClass(require[2:].strip())
+                require_object = VersionClass(require[2:].strip())
                 if not python_version.greater_equal(require_object):
                     ret = False
                     break
             elif require[:2] == '<=':
-                require_object = versionClass(require[2:].strip())
+                require_object = VersionClass(require[2:].strip())
                 if not python_version.less_equal(require_object):
                     ret = False
                     break
             elif require[:1] == '>':
-                require_object = versionClass(require[1:].strip())
+                require_object = VersionClass(require[1:].strip())
                 if not python_version.greater_then(require_object):
                     ret = False
                     break
             elif require[:1] == '<':
-                require_object = versionClass(require[1:].strip())
+                require_object = VersionClass(require[1:].strip())
                 if not python_version.less_then(require_object):
                     ret = False
                     break
             elif require[:1] == '=':
-                require_object = versionClass(require[1:].strip())
+                require_object = VersionClass(require[1:].strip())
                 if not python_version.equal(require_object):
                     ret = False
                     break
             elif require[:2] == '!=':
-                require_object = versionClass(require[2:].strip())
+                require_object = VersionClass(require[2:].strip())
                 if not python_version.not_equal(require_object):
                     ret = False
                     break
@@ -383,7 +383,7 @@ class python_module(dict):
                         name = requirement
                         versions = []
                     ret[name.strip()] = versions
-                except Exception as e:
+                except:
                     pass
         try:
             requiresfilepath = os.path.join(extractedpath, self.modulename.replace('-', '_')+'.egg-info', 'requires.txt')
@@ -420,7 +420,7 @@ class python_module(dict):
                             ret[name.strip()] = versions
                     else:
                         self.print_msg(4, 'Skipping {} because it is disabled in switchfile'.format(switch_name))
-        except Exception as e:
+        except:
             pass
         for k in ret:
             try:
@@ -465,7 +465,7 @@ class python_module(dict):
             try:
                 templatepath = self['template']
             except:
-                raise pythonModuleException('Please specify a jinja template to generate spec from.')
+                raise PythonModuleException('Please specify a jinja template to generate spec from.')
         self['requires'] = self.requires()
         if not 'buildfilelist' in self:
             self['buildfilelist'] = buildfilelist = {}
@@ -517,11 +517,11 @@ class python_module(dict):
                     except:
                         pass
         if not sourceurl:
-            raise pythonModuleException('Could not detect source url')
+            raise PythonModuleException('Could not detect source url')
         return sourceurl
 
     def rpmvalue(self, key):
-        out, err = subprocess.Popen(['rpm', '-E', key], stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
+        out, _err = subprocess.Popen(['rpm', '-E', key], stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
         return out.decode().strip()
 
     def release(self):
@@ -548,7 +548,7 @@ class python_module(dict):
             path = self.rpmvalue(rpmval)
             replacers[path] = rpmval
         sortedreplacers = sorted(replacers.keys(), key=len, reverse=True)
-        for dirname, subdirs, files in os.walk(buildroot):
+        for dirname, _subdirs, files in os.walk(buildroot):
             dirname = dirname[buildrootlen:]
             chapter = 'other'
             for replacer in sortedreplacers:
@@ -597,7 +597,7 @@ class python_module(dict):
         if not 'spec' in self:
             self.generate_spec()
         buildroot = self.buildroot()
-        out, err = subprocess.Popen(['rpmspec', '--query', self['spec']], stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
+        out, _err = subprocess.Popen(['rpmspec', '--query', self['spec']], stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
         rpmlist = out.splitlines()
         if len(rpmlist):
             done = True
@@ -622,7 +622,7 @@ class python_module(dict):
                 subprocess.check_call(['rpmbuild', '--short-circuit', '--buildroot={0}'.format(buildroot), '-b'+stage, self['spec']], stdout=redirect, stderr=redirect)
                 if stage == 'a':
                     self.print_msg(0, 'Building rpm succesfully finished.'.format(stage))
-            except Exception as e:
+            except:
                 if stage == 'i':
                    corrected = False
                    #In this stage, two things might be the issue: The architecture could be other than noarch and the %files section could be off.
@@ -631,72 +631,85 @@ class python_module(dict):
                        self['buildarch'] = 'x86_64'
                        corrected = True
                    if not corrected:
-                       raise pythonModuleException('Building RPM Failed (no architecture change and no filelist change).')
+                       raise PythonModuleException('Building RPM Failed (no architecture change and no filelist change).')
                    os.unlink(self['spec'])
                    self.generate_spec()
                    try:
                        subprocess.check_call(['rpmbuild', '--buildroot={0}'.format(buildroot), '-bi', self['spec']], stdout=redirect, stderr=redirect)
                    except:
-                       raise pythonModuleException('Building RPM Failed (even after architecture change and/or filelist change).')
+                       raise PythonModuleException('Building RPM Failed (even after architecture change and/or filelist change).')
                 else:
-                    raise pythonModuleException('Building rpm FAILED in stage {}.'.format(stage))
+                    raise PythonModuleException('Building rpm FAILED in stage {}.'.format(stage))
         try:
             redirect.close()
         except:
             pass
 
-class versionException(Exception):
+class VersionException(Exception):
+    '''
+    VersionException is raised when the VersionClass runs into an issue.
+    '''
     pass
 
-class versionClass(str):
+class VersionClass(str):
+    '''
+    VersionClass is used to convert a string version like '1.0.1b' into a tuple like (1, 0, 1, 'b').
+    Furthermore, the Versionclass can compare two versions.
+    '''
     parts = None
 
     def greater_equal(self, other):
-        if self.cmp(other) >= 0:
-            return True
-        else:
-            return False
+        '''
+        VersionClass.greater_equal() will return true when the value passed (other)
+        is greater then or equal to the VersionClass owning this function (self).
+        '''
+        return bool(self.cmp(other) >= 0)
 
     def less_equal(self, other):
-        if self.cmp(other) <= 0:
-            return True
-        else:
-            return False
+        '''
+        VersionClass.less_equal() will return true when the value passed (other)
+        is less then or equal to the VersionClass owning this function (self).
+        '''
+        return bool(self.cmp(other) <= 0)
 
     def greater_then(self, other):
-        if self.cmp(other) > 0:
-            return True
-        else:
-            return False
+        '''
+        VersionClass.greater_then() will return true when the value passed (other)
+        is greater then the VersionClass owning this function (self).
+        '''
+        return bool(self.cmp(other) > 0)
 
     def less_then(self, other):
-        if self.cmp(other) < 0:
-            return True
-        else:
-            return False
+        '''
+        VersionClass.less_then() will return true when the value passed (other)
+        is less then the VersionClass owning this function (self).
+        '''
+        return bool(self.cmp(other) < 0)
 
     def equal(self, other):
-        if self.cmp(other) == 0:
-            return True
-        else:
-            return False
+        '''
+        VersionClass.equal() will return true when the value passed (other)
+        is equal to the VersionClass owning this function (self).
+        '''
+        return bool(self.cmp(other) == 0)
 
     def not_equal(self, other):
-        if self.cmp(other) != 0:
-            return True
-        else:
-            return False
+        '''
+        VersionClass.not_equal() will return true when the value passed (other)
+        is not equal to the VersionClass owning this function (self).
+        '''
+        return bool(self.cmp(other) != 0)
 
     def cmp(self, other):
         '''
-        cmp() returns 1 if other bigger, -1 if self bigger and 0 if the same.
+        VersionClass.cmp() compares the version passed (other) to the version owning this 
+        cmp function (self) and returns 1 if other is bigger, -1 if self is bigger and 0 if they are equal.
         '''
         try:
             myParts = self.split()
             hisParts = other.split()
-            smallestlen = min(len(myParts), len(hisParts))
         except:
-            raise versionException('''Seems {0} is'n a valuable component to compare to {1}'''.format(other.__repr__(), self.__repr__()))
+            raise VersionException('''Seems {0} is'n a valuable component to compare to {1}'''.format(other.__repr__(), self.__repr__()))
         i = 0
         for i in range(max(len(myParts), len(hisParts))):
             try:
@@ -721,6 +734,9 @@ class versionClass(str):
         return 0
 
     def split(self):
+        '''
+        VersionClass.split() is used to convert a string version like '1.0.1b' into a tuple like (1, 0, 1, 'b').
+        '''
         if not len(self):
             self.parts = tuple()
         elif not self.parts:
@@ -728,17 +744,17 @@ class versionClass(str):
             letter, digit, other = 'l', 'd', 'o'
             parts = []
             previous_type = None
-            for c in self:
-                if c >= 'a' and c <= 'z' or c >= 'A' and i <= 'Z':
+            for char in self:
+                if char >= 'a' and char <= 'z' or char >= 'A' and i <= 'Z':
                     c_type = letter
-                elif c >= '0' and c <= '9':
+                elif char >= '0' and char <= '9':
                     c_type = digit
                 else:
                     c_type = other
                 if not previous_type:
                     #Processing first character
                     if c_type in [ letter, digit ]:
-                        part = c
+                        part = char
                     else:
                         #Seems to be that first character is not digit or letter.
                         #Thats interesting. Well, anyway, lets skip this one and test next character
@@ -748,10 +764,10 @@ class versionClass(str):
                     pass
                 elif previous_type == other:
                     #New part
-                    part = c
+                    part = char
                 elif c_type == previous_type:
                     #Current and previous characters are both letter or both digit
-                    part += c
+                    part += char
                 #elif c_type == other or c_type != previous_type:
                 else:
                     #end of part
@@ -760,7 +776,7 @@ class versionClass(str):
                     else:
                         parts.append(part)
                     if c_type != other:
-                        part = c
+                        part = char
                     else:
                         part = ""
                 previous_type = c_type
@@ -831,7 +847,7 @@ def download_modules_recursive(packages, args={}, recursive = False):
                         mods = download_modules_recursive(packages = [submodinfo], args = args, recursive = recursive)
                         for k in mods:
                             ret[k] = mods[k]
-                    except Exception as e:
+                    except:
                         print ('Exception occurred while retrieving info on module {}'.format(submodinfo[0]))
                         exc_type, exc_value, exc_traceback = sys.exc_info()
                         fname = os.path.split(exc_traceback.tb_frame.f_code.co_filename)[1]
@@ -841,7 +857,7 @@ def download_modules_recursive(packages, args={}, recursive = False):
             mod.addversionlimit(moduleversion)
     return ret
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(description='Generate a spec file for a python module')
     parser.add_argument('-p', '--package', required=True, action='append', help='The python package to generate a spec for. You can add it multiple times.')
     parser.add_argument('-V', '--version', action='append', help='The version of the module to build a spec for')
@@ -880,7 +896,7 @@ if __name__ == "__main__":
 
             try:
                 switches = yaml.load(open(options.switchfile))
-            except:
+            except Exception:
                 switches = json.loads(open(options.switchfile).read())
 
     modargs = { 'buildername': buildername, 'buildermail': options.buildermail, 'template': template, 'verbosity': options.verbose }
@@ -899,7 +915,7 @@ if __name__ == "__main__":
                 pass
             else:
                 version = '='+version
-        except:
+        except Exception:
             version = ''
         versions.append([version])
     packages = zip(options.package, versions)
@@ -912,7 +928,7 @@ if __name__ == "__main__":
         print('generating specs for', modname)
         try:
             mods[modname].generate_spec()
-        except:
+        except Exception:
             print('Error while generating spec', modname)
             traceback.print_exc()
 
@@ -924,7 +940,7 @@ if __name__ == "__main__":
                 continue
             try:
                 mods[modname].build()
-            except:
+            except Exception:
                 print('Error while building module', modname)
                 traceback.print_exc()
 
@@ -933,3 +949,6 @@ if __name__ == "__main__":
             print('Writing switchfile {}'.format(options.switchfile))
         open(options.switchfile, 'w').write(yaml.dump(switches, default_flow_style=False ))
     sys.exit(len(builderrors) + len(specerrors))
+
+if __name__ == "__main__":
+    main()
