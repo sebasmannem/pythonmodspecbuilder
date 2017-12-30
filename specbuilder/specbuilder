@@ -1,27 +1,27 @@
 #!/usr/bin/env python
-import tarfile
-import zipfile
 import sys
 import os
 import re
+from datetime import datetime
 import argparse
 import subprocess
-import json
 import traceback
-import yaml
 try:
     #Python3
     from urllib.request import urlopen, urlretrieve
-except:
+except ImportError:
     #Python2
     import urllib2
     from urllib import urlretrieve
     def urlopen(url):
         request = urllib2.Request(url)
         return urllib2.urlopen(request)
+import json
+import yaml
+import tarfile
+import zipfile
 from jinja2 import Environment, select_autoescape, FileSystemLoader
 from lxml.html import fromstring
-from datetime import datetime
 
 setupconfigfilescript = '''
 def writesetupconfig(**kwargs):
@@ -40,10 +40,11 @@ def writesetupconfig(**kwargs):
         f.write(json.dumps(setupconfig))
 '''
 
-re_requiresplit = re.compile('^([^<>=!]*)([<>=!]+.*)')
-re_limit = re.compile('([<>=!]+) *(\S*)')
-re_setupfile = re.compile('(setuptools\.)?setup\s*\(')
-re_setupimport = re.compile('^(\s*)(from\s+(setuptools|distutils.core)\s+import.*setup(,|$)|import\s+(setuptools|distutils.core))')
+re_requiresplit = re.compile(r'^([^<>=!]*)([<>=!]+.*)')
+re_limit = re.compile(r'([<>=!]+) *(\S*)')
+re_setupfile = re.compile(r'(setuptools\.)?setup\s*\(')
+import_res = [r'setuptools|distutils.core)\s+import.*setup(,|$)', r'import\s+(setuptools|distutils.core)']
+re_setupimport = re.compile(r'^(\s*)({})'.format('|'.join(import_res)))
 
 class PythonModuleException(Exception):
     pass
@@ -51,6 +52,7 @@ class PythonModuleException(Exception):
 class python_module(dict):
     members = {}
     def __init__(self, *args, **kwargs):
+        super(python_module, self).__init__(*args, **kwargs)
         for arg in args:
             if isinstance(arg, dict):
                 for k in arg:
@@ -63,7 +65,7 @@ class python_module(dict):
             raise PythonModuleException('You didn\'t specify modulename')
         try:
             self.verbosity = int(self['verbosity'])
-        except:
+        except ValueError:
             self.verbosity = 0
         self.__class__.members[self.modulename] = self
         if not 'release' in self:
@@ -72,12 +74,12 @@ class python_module(dict):
     def realmodulename(self):
         try:
             return self['realmodulename']
-        except:
+        except KeyError:
             pass
         try:
             doap = self.get_doap()
             self['realmodulename'] = doap['info']['name']
-        except Exception as e:
+        except (KeyError, PythonModuleException) as e:
             print(e.__repr__())
             self['realmodulename'] = self.modulename
         return self['realmodulename']
@@ -105,24 +107,24 @@ class python_module(dict):
                 version_objects.append(version_object.not_equal)
         try:
             self['versionlimits'] += version_objects
-        except:
+        except TypeError:
             self['versionlimits'] = version_objects
         try:
             del self['latestversion']
-        except:
+        except KeyError:
             pass
 
     def latest_version(self):
         try:
             latestversion = self['latestversion']
-        except:
+        except KeyError:
             latestversion = None
         if latestversion:
             return latestversion
 
         try:
             versionlimits = self['versionlimits']
-        except:
+        except KeyError:
             versionlimits = None
 
         available_versions = [ v for v in self.available_versions()]
@@ -143,7 +145,7 @@ class python_module(dict):
             for limit in versionlimits:
                 self.print_msg(4, 'versionlimit: ' + limit.__repr__())
             self.print_msg(4, 'versions' + available_versions.__repr__())
-            raise PythonModuleException('No latest version fits to version limits {}'.format())
+            raise PythonModuleException('No latest version fits to version limits {}'.format(versionlimits.__repr__()))
         self['latestversion'] = latestversion
 
         return latestversion
@@ -151,7 +153,7 @@ class python_module(dict):
     def available_versions(self):
         try:
             versions = self['versions']
-        except:
+        except KeyError:
             versions = None
         if not versions:
             self.print_msg(3, 'Detecting all available versions')
@@ -168,7 +170,7 @@ class python_module(dict):
     def get_doap(self):
         try:
             doap = self['doap']
-        except:
+        except KeyError:
             doap = None
         if not doap:
             self.print_msg(1, 'Downloading doap record')
@@ -184,7 +186,7 @@ class python_module(dict):
     def download_source(self):
         try:
             sourcepath=self['sourcepath']
-        except:
+        except KeyError:
             sourcepath=None
         if not sourcepath:
             url = self.downloadpage()
@@ -200,7 +202,7 @@ class python_module(dict):
         sourcepath = self.download_source()
         try:
             extractedpath = self['extractedpath']
-        except:
+        except KeyError:
             extractedpath = None
         if not extractedpath:
             extractedpath = self['extractedpath'] = '/tmp/{0}-{1}'.format(self.realmodulename(), self.latest_version())
@@ -227,8 +229,8 @@ class python_module(dict):
 
     def get_setupconfig(self):
         extractedpath = self.extract_source()
-        setupconfigfilepath = '{0}/writesetupconfig.py'.format(extractedpath, self.modulename)
-        setupconfigjsonpath = '{0}/writesetupconfig.json'.format(extractedpath, self.modulename)
+        setupconfigfilepath = '{0}/writesetupconfig.py'.format(extractedpath)
+        setupconfigjsonpath = '{0}/writesetupconfig.json'.format(extractedpath)
 
         if not os.path.exists(setupconfigfilepath):
             self.print_msg(2, 'Converting setup.py to writesetupconfig.py')
@@ -272,14 +274,14 @@ class python_module(dict):
     def check_python_version(self):
         try:
             return self['check_python_version']
-        except:
+        except KeyError:
             pass
         self.print_msg(3, 'Detecting python_requires')
         python_version = VersionClass('.'.join([ str(version) for version in sys.version_info]))
         config = self.get_setupconfig()
         try:
             requires = config['python_requires'].split(',')
-        except:
+        except (KeyError, AttributeError):
             self['check_python_version'] = True
             return self['check_python_version']
         ret = True
@@ -336,7 +338,7 @@ class python_module(dict):
             if isinstance(requirechapter, list):
                 try:
                     requires[config_key] += requirechapter
-                except:
+                except (KeyError, AttributeError):
                     requires[config_key] = requirechapter
             elif isinstance(requirechapter, dict):
                 for chapter in requirechapter.keys():
@@ -346,19 +348,19 @@ class python_module(dict):
                         items = [items]
                     try:
                         requires[chapter] += items
-                    except:
+                    except (KeyError, AttributeError):
                         requires[chapter] = items
             elif isinstance(requirechapter, str):
                 try:
                     requires[config_key].append(requirechapter)
-                except:
+                except KeyError:
                     requires[config_key] = [ requirechapter ]
             else:
                 raise Exception('Unknown requirechapter type for {}'.format(requirechapter.__repr__()))
         for requirechapter in requires:
             try:
                 switch_value = self['require_chapters'][requirechapter]
-            except:
+            except KeyError:
                 if 'test' in requirechapter:
                     switch_value = self['require_chapters'][requirechapter] = False
                 else:
@@ -383,7 +385,7 @@ class python_module(dict):
                         name = requirement
                         versions = []
                     ret[name.strip()] = versions
-                except:
+                except Exception:
                     pass
         try:
             requiresfilepath = os.path.join(extractedpath, self.modulename.replace('-', '_')+'.egg-info', 'requires.txt')
@@ -396,7 +398,7 @@ class python_module(dict):
                         switch_name = line.replace('[','').replace(']','')
                         try:
                             switch_value = self['require_chapters'][switch_name]
-                        except:
+                        except KeyError:
                             switch_value = self['require_chapters'][switch_name] = True
                         continue
                     elif switch_value:
@@ -420,12 +422,12 @@ class python_module(dict):
                             ret[name.strip()] = versions
                     else:
                         self.print_msg(4, 'Skipping {} because it is disabled in switchfile'.format(switch_name))
-        except:
+        except Exception:
             pass
         for k in ret:
             try:
                 mod_valid = self.__class__.members[k].check_python_version()
-            except:
+            except (KeyError, PythonModuleException):
                 mod_valid = True
             if mod_valid:
                 if ret[k]:
@@ -489,7 +491,7 @@ class python_module(dict):
     def downloadpage(self):
         try:
             sourceurl = self['sourceurl']
-        except:
+        except KeyError:
             sourceurl = None
 
         if not sourceurl:
@@ -506,7 +508,7 @@ class python_module(dict):
                     if dltype == 'Source':
                         sourceurl = self['sourceurl'] = dlurl
                         break
-                except:
+                except Exception:
                     pass
             #Workaround, get License from pypi web url
             if not 'pypi_license' in self:
@@ -514,30 +516,26 @@ class python_module(dict):
                     try:
                         if a.text.startswith('License :: OSI Approved :: '):
                             self['pypi_license'] = a.text.split('::')[-1].strip()
-                    except:
+                    except (AttributeError, IndexError):
                         pass
         if not sourceurl:
             raise PythonModuleException('Could not detect source url')
         return sourceurl
 
-    def rpmvalue(self, key):
-        out, _err = subprocess.Popen(['rpm', '-E', key], stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
-        return out.decode().strip()
-
     def release(self):
-        return self.rpmvalue(self['release'])
+        return rpmvalue(self['release'])
 
     def arch(self):
         try:
             return self['buildarch']
-        except:
+        except KeyError:
             return 'noarch'
 
     def buildroot(self):
         try:
             return self['buildroot']
-        except:
-            return os.path.expanduser('~/rpmbuild/BUILDROOT/{0}-{1}.{3}'.format(self.modulename, self.latest_version(), self.release(), self.arch()))
+        except KeyError:
+            return os.path.expanduser('~/rpmbuild/BUILDROOT/{0}-{1}.{2}'.format(self.modulename, self.latest_version(), self.arch()))
 
     def createbuildfilelist(self):
         buildroot = self.buildroot()
@@ -545,7 +543,7 @@ class python_module(dict):
         buildfilelist = dict()
         replacers = {}
         for rpmval in ['%{python3_sitelib}', '%{python3_sitearch}', '%{python_sitelib}', '%{python_sitearch}', '%{_bindir}', '%{_libdir}']:
-            path = self.rpmvalue(rpmval)
+            path = rpmvalue(rpmval)
             replacers[path] = rpmval
         sortedreplacers = sorted(replacers.keys(), key=len, reverse=True)
         for dirname, _subdirs, files in os.walk(buildroot):
@@ -621,29 +619,33 @@ class python_module(dict):
             try:
                 subprocess.check_call(['rpmbuild', '--short-circuit', '--buildroot={0}'.format(buildroot), '-b'+stage, self['spec']], stdout=redirect, stderr=redirect)
                 if stage == 'a':
-                    self.print_msg(0, 'Building rpm succesfully finished.'.format(stage))
+                    self.print_msg(0, 'Building rpm succesfully finished.')
             except:
                 if stage == 'i':
-                   corrected = False
-                   #In this stage, two things might be the issue: The architecture could be other than noarch and the %files section could be off.
-                   corrected = self.createbuildfilelist()
-                   if os.path.exists(os.path.join(buildroot, 'usr/lib64')) and self['spec_generated'] and self.arch() == 'noarch':
-                       self['buildarch'] = 'x86_64'
-                       corrected = True
-                   if not corrected:
-                       raise PythonModuleException('Building RPM Failed (no architecture change and no filelist change).')
-                   os.unlink(self['spec'])
-                   self.generate_spec()
-                   try:
-                       subprocess.check_call(['rpmbuild', '--buildroot={0}'.format(buildroot), '-bi', self['spec']], stdout=redirect, stderr=redirect)
-                   except:
-                       raise PythonModuleException('Building RPM Failed (even after architecture change and/or filelist change).')
+                    corrected = False
+                    #In this stage, two things might be the issue: The architecture could be other than noarch and the %files section could be off.
+                    corrected = self.createbuildfilelist()
+                    if os.path.exists(os.path.join(buildroot, 'usr/lib64')) and self['spec_generated'] and self.arch() == 'noarch':
+                        self['buildarch'] = 'x86_64'
+                        corrected = True
+                    if not corrected:
+                        raise PythonModuleException('Building RPM Failed (no architecture change and no filelist change).')
+                    os.unlink(self['spec'])
+                    self.generate_spec()
+                    try:
+                        subprocess.check_call(['rpmbuild', '--buildroot={0}'.format(buildroot), '-bi', self['spec']], stdout=redirect, stderr=redirect)
+                    except:
+                        raise PythonModuleException('Building RPM Failed (even after architecture change and/or filelist change).')
                 else:
                     raise PythonModuleException('Building rpm FAILED in stage {}.'.format(stage))
         try:
             redirect.close()
         except:
             pass
+
+def rpmvalue(key):
+    out, _err = subprocess.Popen(['rpm', '-E', key], stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
+    return out.decode().strip()
 
 class VersionException(Exception):
     '''
@@ -702,7 +704,7 @@ class VersionClass(str):
 
     def cmp(self, other):
         '''
-        VersionClass.cmp() compares the version passed (other) to the version owning this 
+        VersionClass.cmp() compares the version passed (other) to the version owning this
         cmp function (self) and returns 1 if other is bigger, -1 if self is bigger and 0 if they are equal.
         '''
         try:
@@ -745,7 +747,7 @@ class VersionClass(str):
             parts = []
             previous_type = None
             for char in self:
-                if char >= 'a' and char <= 'z' or char >= 'A' and i <= 'Z':
+                if char >= 'a' and char <= 'z' or char >= 'A' and char <= 'Z':
                     c_type = letter
                 elif char >= '0' and char <= '9':
                     c_type = digit
