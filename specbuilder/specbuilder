@@ -1,4 +1,7 @@
 #!/usr/bin/env python
+'''
+This module is meant to download python modules and craete specs and rpms out of them.
+'''
 import sys
 import os
 import re
@@ -11,19 +14,23 @@ try:
     from urllib.request import urlopen, urlretrieve
 except ImportError:
     #Python2
-    import urllib2
     from urllib import urlretrieve
+
+    import urllib2
     def urlopen(url):
+        '''
+        This function is meant as a replacement for urlopen of python3
+        '''
         request = urllib2.Request(url)
         return urllib2.urlopen(request)
 import json
-import yaml
 import tarfile
 import zipfile
+import yaml
 from jinja2 import Environment, select_autoescape, FileSystemLoader
 from lxml.html import fromstring
 
-setupconfigfilescript = '''
+__SetupConfigFileScript__ = '''
 def writesetupconfig(**kwargs):
     import json
     setupconfig=dict()
@@ -40,19 +47,20 @@ def writesetupconfig(**kwargs):
         f.write(json.dumps(setupconfig))
 '''
 
-re_requiresplit = re.compile(r'^([^<>=!]*)([<>=!]+.*)')
-re_limit = re.compile(r'([<>=!]+) *(\S*)')
-re_setupfile = re.compile(r'(setuptools\.)?setup\s*\(')
-import_res = [r'setuptools|distutils.core)\s+import.*setup(,|$)', r'import\s+(setuptools|distutils.core)']
-re_setupimport = re.compile(r'^(\s*)({})'.format('|'.join(import_res)))
-
 class PythonModuleException(Exception):
+    '''
+    This exception is raised by a functional error in the PythonModule.
+    '''
     pass
 
-class python_module(dict):
+class PythonModule(dict):
+    '''
+    Objects of this class can hold all relevant data with regards to a python
+    module downloaded from pypi.
+    '''
     members = {}
     def __init__(self, *args, **kwargs):
-        super(python_module, self).__init__(*args, **kwargs)
+        super(PythonModule, self).__init__(*args, **kwargs)
         for arg in args:
             if isinstance(arg, dict):
                 for k in arg:
@@ -68,10 +76,14 @@ class python_module(dict):
         except ValueError:
             self.verbosity = 0
         self.__class__.members[self.modulename] = self
-        if not 'release' in self:
+        if 'release' not in self:
             self['release'] = '1%{?dist}'
 
     def realmodulename(self):
+        '''
+        This method retrieves and returns the real name of the module (with
+        correct case, a.o.).
+        '''
         try:
             return self['realmodulename']
         except KeyError:
@@ -79,12 +91,16 @@ class python_module(dict):
         try:
             doap = self.get_doap()
             self['realmodulename'] = doap['info']['name']
-        except (KeyError, PythonModuleException) as e:
-            print(e.__repr__())
+        except (KeyError, PythonModuleException) as error:
+            print(error.__repr__())
             self['realmodulename'] = self.modulename
         return self['realmodulename']
 
     def addversionlimit(self, versions):
+        '''
+        This method adds a version limit (which limits the list of valid
+        versions for the latest_version method).
+        '''
         version_objects = []
         for version in versions:
             if version[:2] == '>=':
@@ -115,6 +131,9 @@ class python_module(dict):
             pass
 
     def latest_version(self):
+        '''
+        This method returns the latest version which fits to all version limits.
+        '''
         try:
             latestversion = self['latestversion']
         except KeyError:
@@ -127,7 +146,7 @@ class python_module(dict):
         except KeyError:
             versionlimits = None
 
-        available_versions = [ v for v in self.available_versions()]
+        available_versions = [v for v in self.available_versions()]
         for version in available_versions:
             version_unfit = False
             if versionlimits:
@@ -145,27 +164,34 @@ class python_module(dict):
             for limit in versionlimits:
                 self.print_msg(4, 'versionlimit: ' + limit.__repr__())
             self.print_msg(4, 'versions' + available_versions.__repr__())
-            raise PythonModuleException('No latest version fits to version limits {}'.format(versionlimits.__repr__()))
+            exceptstr = 'No latest version fits to version limits '
+            exceptstr += versionlimits.__repr__()
+            raise PythonModuleException(exceptstr)
         self['latestversion'] = latestversion
 
         return latestversion
 
     def available_versions(self):
+        '''
+        This method retrieves and returns all versions that are available of
+        this module.
+        '''
         try:
             versions = self['versions']
         except KeyError:
             versions = None
         if not versions:
             self.print_msg(3, 'Detecting all available versions')
-            self['versionsurl'] = url = 'https://pypi.org/project/{0}/#history'.format(self.modulename)
+            url = 'https://pypi.org/project/{0}/#history'.format(self.modulename)
+            self['versionsurl'] = url
             handler = urlopen(url)
             root = fromstring(handler.read())
             versions = self['versions'] = []
             for div in root.find_class("release__version"):
-                for l in div.iterlinks():
-                    versions.append(VersionClass(l[0].text))
-        for v in versions:
-            yield(v)
+                for link in div.iterlinks():
+                    versions.append(VersionClass(link[0].text))
+        for version in versions:
+            yield version
 
     def get_doap(self):
         try:
@@ -231,11 +257,16 @@ class python_module(dict):
         extractedpath = self.extract_source()
         setupconfigfilepath = '{0}/writesetupconfig.py'.format(extractedpath)
         setupconfigjsonpath = '{0}/writesetupconfig.json'.format(extractedpath)
+        import_res = [r'setuptools|distutils.core)\s+import.*setup(,|$)',
+            r'import\s+(setuptools|distutils.core)']
+        re_setupimport = re.compile(r'^(\s*)({})'.format('|'.join(import_res)))
+
 
         if not os.path.exists(setupconfigfilepath):
             self.print_msg(2, 'Converting setup.py to writesetupconfig.py')
             setupfile = open('{0}/setup.py'.format(extractedpath), 'rb')
             setupconfigfile = open(setupconfigfilepath, 'w')
+            re_setupfile = re.compile(r'(setuptools\.)?setup\s*\(')
             added = False
             content = []
             for l in setupfile:
@@ -246,13 +277,13 @@ class python_module(dict):
                 if m:
                     added = True
                     indent = m.group(1)
-                    for scriptline in setupconfigfilescript.format(setupconfigjsonpath).split('\n'):
+                    for scriptline in __SetupConfigFileScript__.format(setupconfigjsonpath).split('\n'):
                         content.append(indent+scriptline+'\n')
                         added = True
             self.print_msg(4,'could not find setup import. adding writesetupconfig to the top of {}'.format(setupconfigfilepath))
             for line in content:
                 if not added and line[0] != '#':
-                    setupconfigfile.write(setupconfigfilescript.format(setupconfigjsonpath)+'\n')
+                    setupconfigfile.write(__SetupConfigFileScript__.format(setupconfigjsonpath)+'\n')
                     added = True
                 setupconfigfile.write(line)
             setupfile.close()
@@ -357,6 +388,9 @@ class python_module(dict):
                     requires[config_key] = [ requirechapter ]
             else:
                 raise Exception('Unknown requirechapter type for {}'.format(requirechapter.__repr__()))
+
+        re_requiresplit = re.compile(r'^([^<>=!]*)([<>=!]+.*)')
+        re_limit = re.compile(r'([<>=!]+) *(\S*)')
         for requirechapter in requires:
             try:
                 switch_value = self['require_chapters'][requirechapter]
@@ -556,7 +590,7 @@ class python_module(dict):
                     break
             try:
                 buildfilesublist = buildfilelist[chapter]
-            except:
+            except KeyError:
                 buildfilesublist = buildfilelist[chapter] = set()
             if not dirname:
                 dirname = '/'
@@ -620,7 +654,7 @@ class python_module(dict):
                 subprocess.check_call(['rpmbuild', '--short-circuit', '--buildroot={0}'.format(buildroot), '-b'+stage, self['spec']], stdout=redirect, stderr=redirect)
                 if stage == 'a':
                     self.print_msg(0, 'Building rpm succesfully finished.')
-            except:
+            except subprocess.CalledProcessError:
                 if stage == 'i':
                     corrected = False
                     #In this stage, two things might be the issue: The architecture could be other than noarch and the %files section could be off.
@@ -640,7 +674,7 @@ class python_module(dict):
                     raise PythonModuleException('Building rpm FAILED in stage {}.'.format(stage))
         try:
             redirect.close()
-        except:
+        except AttributeError:
             pass
 
 def rpmvalue(key):
@@ -712,28 +746,33 @@ class VersionClass(str):
             hisParts = other.split()
         except:
             raise VersionException('''Seems {0} is'n a valuable component to compare to {1}'''.format(other.__repr__(), self.__repr__()))
-        i = 0
+        ret = 0
         for i in range(max(len(myParts), len(hisParts))):
             try:
                 mine = myParts[i]
             except IndexError:
-                return 1
+                ret = 1
+                break
             try:
                 his = hisParts[i]
             except IndexError:
-                return -1
+                ret = -1
+                break
             mineisstr = isinstance(mine, str)
             hisisstr  = isinstance(his, str)
             if mineisstr and not hisisstr:
-                return 1
+                ret = 1
+                break
             elif hisisstr and not mineisstr:
-                return -1
+                ret = -1
+                break
             elif mine < his:
-                return 1
+                ret = 1
+                break
             elif mine > his:
-                return -1
-            i+=1
-        return 0
+                ret = -1
+                break
+        return ret
 
     def split(self):
         '''
@@ -793,7 +832,7 @@ class VersionClass(str):
 def description_sanitizer(desc):
     desc=desc.encode('ascii', 'ignore').decode()
     tag_re = re.compile(':[a-z]+:')
-    empty_re = re.compile('^\s*$')
+    empty_re = re.compile(r'^\s*$')
     empty_count = 0
     ret = []
     for l in desc.split('\n'):
@@ -817,10 +856,11 @@ def description_sanitizer(desc):
             ret.append(l)
     return '\n'.join(ret)
 
-def download_modules_recursive(packages, args={}, recursive = False):
+def download_modules_recursive(packages, args=None, recursive = False):
+    args = args or {}
     try:
         verbosity = args['verbosity']
-    except:
+    except KeyError:
         verbosity = 1
     ret = {}
     for modulename, moduleversion in packages:
@@ -831,13 +871,13 @@ def download_modules_recursive(packages, args={}, recursive = False):
         modargs['modulename'] = modulename
         try:
             modargs['extra_requires'] = args['extra_requires'][modulename]
-        except:
+        except KeyError:
             modargs['extra_requires'] = []
-        if modulename in python_module.members:
-            mod = python_module.members[modulename]
+        if modulename in PythonModule.members:
+            mod = PythonModule.members[modulename]
             ret[modulename] = mod
         else:
-            mod = python_module(modargs)
+            mod = PythonModule(modargs)
             ret[modulename] = mod
             if recursive:
                 for submodinfo in mod.requires():
@@ -849,7 +889,7 @@ def download_modules_recursive(packages, args={}, recursive = False):
                         mods = download_modules_recursive(packages = [submodinfo], args = args, recursive = recursive)
                         for k in mods:
                             ret[k] = mods[k]
-                    except:
+                    except Exception:
                         print ('Exception occurred while retrieving info on module {}'.format(submodinfo[0]))
                         exc_type, exc_value, exc_traceback = sys.exc_info()
                         fname = os.path.split(exc_traceback.tb_frame.f_code.co_filename)[1]
