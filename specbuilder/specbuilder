@@ -9,6 +9,9 @@ from datetime import datetime
 import argparse
 import subprocess
 import traceback
+import json
+import tarfile
+import zipfile
 try:
     #Python3
     from urllib.request import urlopen, urlretrieve
@@ -23,9 +26,6 @@ except ImportError:
         '''
         request = urllib2.Request(url)
         return urllib2.urlopen(request)
-import json
-import tarfile
-import zipfile
 import yaml
 from jinja2 import Environment, select_autoescape, FileSystemLoader
 from lxml.html import fromstring
@@ -123,7 +123,7 @@ class PythonModule(dict):
                 version_objects.append(version_object.not_equal)
         try:
             self['versionlimits'] += version_objects
-        except TypeError:
+        except KeyError:
             self['versionlimits'] = version_objects
         try:
             del self['latestversion']
@@ -194,6 +194,9 @@ class PythonModule(dict):
             yield version
 
     def get_doap(self):
+        '''
+        This method retrieves the doap record for a python module.
+        '''
         try:
             doap = self['doap']
         except KeyError:
@@ -210,6 +213,9 @@ class PythonModule(dict):
         return doap
 
     def download_source(self):
+        '''
+        This method downloads the source package for a specific version of a specific module.
+        '''
         try:
             sourcepath=self['sourcepath']
         except KeyError:
@@ -225,6 +231,9 @@ class PythonModule(dict):
         return sourcepath
 
     def extract_source(self):
+        '''
+        This method downloads the sources and sets self['extractedpath'] to the extracted path.
+        '''
         sourcepath = self.download_source()
         try:
             extractedpath = self['extractedpath']
@@ -238,29 +247,34 @@ class PythonModule(dict):
                 file_extension = '.'.join(file_name_parts[1:])
                 file_extension_lower = file_extension.lower()
                 if file_extension_lower.endswith('tar.gz') or file_extension_lower.endswith('tgz'):
-                    archive = tarfile.open(sourcepath, mode='r:gz')
+                    tarfile.open(sourcepath, mode='r:gz').extractall(path="/tmp")
                 elif file_extension_lower.endswith('tar'):
-                    archive = tarfile.open(sourcepath, mode='r')
+                    tarfile.open(sourcepath, mode='r').extractall(path="/tmp")
                 elif file_extension_lower.endswith('zip'):
-                    archive = zipfile.ZipFile(sourcepath, mode='r')
+                    zipfile.ZipFile(sourcepath, mode='r').extractall(path="/tmp")
                 else:
                     print(file_extension_lower)
                     raise PythonModuleException('Cannot extract {0} (unknown extension)'.format(sourcepath))
                 self.print_msg(1, 'Extracting sources from {0}'.format(sourcepath))
-                archive.extractall(path="/tmp")
+
             except:
                 print('Error extracting {0}'.format(extractedpath))
                 raise
         return extractedpath
 
     def get_setupconfig(self):
+        '''
+        This method generates a setupconfig script, calls it and retrieves output to
+        self['setupconfig']. The result holds all kind of info that can be used in
+        the spec jinja template.
+        '''
         extractedpath = self.extract_source()
         setupconfigfilepath = '{0}/writesetupconfig.py'.format(extractedpath)
         setupconfigjsonpath = '{0}/writesetupconfig.json'.format(extractedpath)
-        import_res = [r'setuptools|distutils.core)\s+import.*setup(,|$)',
-            r'import\s+(setuptools|distutils.core)']
+        import_res = []
+        import_res.append(r'from\s+(setuptools|distutils.core)\s+import\s.*setup(,|$)')
+        import_res.append(r'import\s+(setuptools|distutils.core)')
         re_setupimport = re.compile(r'^(\s*)({})'.format('|'.join(import_res)))
-
 
         if not os.path.exists(setupconfigfilepath):
             self.print_msg(2, 'Converting setup.py to writesetupconfig.py')
@@ -269,21 +283,22 @@ class PythonModule(dict):
             re_setupfile = re.compile(r'(setuptools\.)?setup\s*\(')
             added = False
             content = []
-            for l in setupfile:
-                l=l.decode('ascii', 'ignore')
-                l = re_setupfile.sub('writesetupconfig(',l)
-                content.append(l)
-                m = re_setupimport.search(l.rstrip())
-                if m:
+            for line in setupfile:
+                line = line.decode('ascii', 'ignore')
+                line = re_setupfile.sub('writesetupconfig(', line)
+                content.append(line)
+                matches = re_setupimport.search(line.rstrip())
+                scriptcontent = __SetupConfigFileScript__.format(setupconfigjsonpath)
+                if matches:
                     added = True
-                    indent = m.group(1)
-                    for scriptline in __SetupConfigFileScript__.format(setupconfigjsonpath).split('\n'):
-                        content.append(indent+scriptline+'\n')
+                    indent = matches.group(1)
+                    for scriptline in scriptcontent.split('\n'):
+                        content.append(indent + scriptline + '\n')
                         added = True
-            self.print_msg(4,'could not find setup import. adding writesetupconfig to the top of {}'.format(setupconfigfilepath))
+            self.print_msg(4, 'Adding writesetupconfig to the top of ' + setupconfigfilepath)
             for line in content:
                 if not added and line[0] != '#':
-                    setupconfigfile.write(__SetupConfigFileScript__.format(setupconfigjsonpath)+'\n')
+                    setupconfigfile.write(scriptcontent + '\n')
                     added = True
                 setupconfigfile.write(line)
             setupfile.close()
@@ -294,7 +309,7 @@ class PythonModule(dict):
             writer = subprocess.Popen([sys.executable, setupconfigfilepath], cwd=extractedpath)
             writer.wait()
 
-        if not 'setupconfig' in self:
+        if 'setupconfig' not in self:
             self.print_msg(3, 'Reading setupconfig.json')
             setupconfig = open(setupconfigjsonpath).read()
             if not len(setupconfig):
@@ -303,12 +318,15 @@ class PythonModule(dict):
         return self['setupconfig']
 
     def check_python_version(self):
+        '''
+        This method checks if the python_version fits the requirements for this module.
+        '''
         try:
             return self['check_python_version']
         except KeyError:
             pass
         self.print_msg(3, 'Detecting python_requires')
-        python_version = VersionClass('.'.join([ str(version) for version in sys.version_info]))
+        python_version = VersionClass('.'.join([str(version) for version in sys.version_info]))
         config = self.get_setupconfig()
         try:
             requires = config['python_requires'].split(',')
@@ -352,6 +370,9 @@ class PythonModule(dict):
         return ret
 
     def requires(self):
+        '''
+        this method returns all the requires for this module.
+        '''
         self.print_msg(3, 'Detecting requires')
         extractedpath = self.extract_source()
         config = self.get_setupconfig()
@@ -359,7 +380,7 @@ class PythonModule(dict):
         ret = {}
         for config_key in config.keys():
             config_key = config_key.strip()
-            if not 'require' in config_key:
+            if 'require' not in config_key:
                 continue
             if config_key == 'python_requires':
                 continue
@@ -385,9 +406,9 @@ class PythonModule(dict):
                 try:
                     requires[config_key].append(requirechapter)
                 except KeyError:
-                    requires[config_key] = [ requirechapter ]
+                    requires[config_key] = [requirechapter]
             else:
-                raise Exception('Unknown requirechapter type for {}'.format(requirechapter.__repr__()))
+                raise Exception('Unknown requirechapter type for ' + requirechapter.__repr__())
 
         re_requiresplit = re.compile(r'^([^<>=!]*)([<>=!]+.*)')
         re_limit = re.compile(r'([<>=!]+) *(\S*)')
@@ -400,13 +421,13 @@ class PythonModule(dict):
                 else:
                     switch_value = self['require_chapters'][requirechapter] = True
             if not switch_value:
-                self.print_msg(4, 'Skipping {} because it is disabled in switchfile'.format(requirechapter))
+                self.print_msg(4, 'Skipping {}. Disabled in switchfile'.format(requirechapter))
                 continue
             for requirement in requires[requirechapter]:
                 try:
                     requiresplitmatch = re_requiresplit.match(requirement)
                     if requiresplitmatch:
-                        name  = requiresplitmatch.group(1)
+                        name = requiresplitmatch.group(1)
                         versions = []
                         for version in requiresplitmatch.group(2).split(','):
                             if '!=' in version:
@@ -422,32 +443,33 @@ class PythonModule(dict):
                 except Exception:
                     pass
         try:
-            requiresfilepath = os.path.join(extractedpath, self.modulename.replace('-', '_')+'.egg-info', 'requires.txt')
+            egg_name = self.modulename.replace('-', '_')+'.egg-info'
+            requiresfilepath = os.path.join(extractedpath, egg_name, 'requires.txt')
             with open(requiresfilepath) as requiresfile:
                 self.print_msg(3, 'Reading requires from '+requiresfilepath)
                 switch_value = True
                 for line in requiresfile:
                     line = line.strip()
                     if '[' in line:
-                        switch_name = line.replace('[','').replace(']','')
+                        switch_name = line.replace('[', '').replace(']', '')
                         try:
                             switch_value = self['require_chapters'][switch_name]
                         except KeyError:
                             switch_value = self['require_chapters'][switch_name] = True
                         continue
                     elif switch_value:
-                        m = re_requiresplit.match(line)
-                        if m:
-                            name  = m.group(1)
+                        match = re_requiresplit.match(line)
+                        if match:
+                            name = match.group(1)
                             versions = []
-                            for version in  m.group(2).split(','):
+                            for version in  match.group(2).split(','):
                                 if '!=' in version:
                                     #!= isn't supported by rpmbuild. skip it.
                                     pass
                                 else:
                                     limit_matches = re_limit.match(version).groups()
                                     versions.append('{0} {1}'.format(*limit_matches))
-                            versions = [ '{0} {1}'.format(*(re_limit.match(v).groups())) for v in versions ]
+                            versions = ['{0} {1}'.format(*(re_limit.match(v).groups())) for v in versions]
                         else:
                             name = line
                             versions = []
@@ -455,7 +477,7 @@ class PythonModule(dict):
                         if name:
                             ret[name.strip()] = versions
                     else:
-                        self.print_msg(4, 'Skipping {} because it is disabled in switchfile'.format(switch_name))
+                        self.print_msg(4, 'Skipping {}. Disabled in switchfile'.format(switch_name))
         except Exception:
             pass
         for k in ret:
@@ -471,11 +493,17 @@ class PythonModule(dict):
                 yield (k, limits)
 
     def print_msg(self, verbosity, msg):
+        '''
+        This method prints messages depending on verbosity level.
+        '''
         if verbosity <= self.verbosity:
             print('{0}{1}: {2}'.format(' '*verbosity, self.modulename, msg))
             sys.stdout.flush()
 
     def generate_spec(self, templatepath=None):
+        '''
+        This method generates a spec for building an rpm for this module.
+        '''
         if not self.check_python_version():
             self.print_msg(1, 'Not building spec, because module not fit for this python version.')
             return
@@ -491,7 +519,8 @@ class PythonModule(dict):
         else:
             self['description'] = ''
         self['version'] = self.latest_version()
-        self['spec'] = os.path.expanduser('~/rpmbuild/SPECS/{0}-{1}.spec'.format(self.modulename, self.latest_version()))
+        self['spec'] = '~/rpmbuild/SPECS/{0}-{1}.spec'.format(self.modulename, self['version'])
+        self['spec'] = os.path.expanduser(self['spec'])
         self['date'] = datetime.now().strftime('%a %b %-d %Y')
         if 'license' in config:
             self['license'] = config['license']
@@ -501,28 +530,35 @@ class PythonModule(dict):
             try:
                 templatepath = self['template']
             except:
-                raise PythonModuleException('Please specify a jinja template to generate spec from.')
+                raise PythonModuleException('No jinja template specified.')
         self['requires'] = self.requires()
-        if not 'buildfilelist' in self:
+        if 'buildfilelist' not in self:
             self['buildfilelist'] = buildfilelist = {}
             buildfilelist['%{python3_sitelib}'] = buildfilesublist = set()
-            buildfilesublist.add('%{python3_sitelib}/%{modname}-%{version}-py%{python3_version}.egg-info')
-            buildfilesublist.add('%{python3_sitelib}/%{modname}')
+            modpath = '%{python3_sitelib}/%{modname}'
+            buildfilesublist.add(modpath + '-%{version}-py%{python3_version}.egg-info')
+            buildfilesublist.add(modpath)
 
         if not os.path.exists(self['spec']):
             self.print_msg(2, 'Creating spec from template')
             templatedir = os.path.dirname(templatepath)
             templatefile = os.path.basename(templatepath)
-            env = Environment(loader = FileSystemLoader(templatedir), autoescape=select_autoescape(['html', 'xml']))
+            loader = FileSystemLoader(templatedir)
+            autoescape = select_autoescape(['html', 'xml'])
+            env = Environment(loader=loader, autoescape=autoescape)
             template = env.get_template(templatefile)
-            spec=open(self['spec'], 'w')
+            spec = open(self['spec'], 'w')
             spec.write(template.render(self))
             spec.close()
             self['spec_generated'] = True
-        elif not 'spec_generated' in self:
+        elif 'spec_generated' not in self:
             self['spec_generated'] = False
 
     def downloadpage(self):
+        '''
+        This method sets and returns self['sourceurl'] from the module info page on pypi.
+        In addition it also sets self['pypi_license'] from the module info page on pypi.
+        '''
         try:
             sourceurl = self['sourceurl']
         except KeyError:
@@ -530,13 +566,14 @@ class PythonModule(dict):
 
         if not sourceurl:
             self.print_msg(3, 'Detecting download page')
-            dlpageurl = 'https://pypi.python.org/pypi/{0}/{1}'.format(self.modulename, self.latest_version())
+            dlpageurl = 'https://pypi.python.org/pypi/'
+            dlpageurl += '{0}/{1}'.format(self.modulename, self.latest_version())
             dlpagehandler = urlopen(dlpageurl)
             dlpageroot = fromstring(dlpagehandler.read())
             tablerows = dlpageroot.xpath("//tr")
-            for tr in tablerows:
+            for tablerow in tablerows:
                 try:
-                    tablecols = tr.xpath("td")
+                    tablecols = tablerow.xpath("td")
                     dlurl = tablecols[0].xpath("span/a")[0].attrib['href']
                     dltype = tablecols[1].text.strip()
                     if dltype == 'Source':
@@ -545,11 +582,11 @@ class PythonModule(dict):
                 except Exception:
                     pass
             #Workaround, get License from pypi web url
-            if not 'pypi_license' in self:
-                for a in dlpageroot.xpath("//a"):
+            if 'pypi_license' not in self:
+                for atag in dlpageroot.xpath("//a"):
                     try:
-                        if a.text.startswith('License :: OSI Approved :: '):
-                            self['pypi_license'] = a.text.split('::')[-1].strip()
+                        if atag.text.startswith('License :: OSI Approved :: '):
+                            self['pypi_license'] = atag.text.split('::')[-1].strip()
                     except (AttributeError, IndexError):
                         pass
         if not sourceurl:
@@ -580,7 +617,7 @@ class PythonModule(dict):
             path = rpmvalue(rpmval)
             replacers[path] = rpmval
         sortedreplacers = sorted(replacers.keys(), key=len, reverse=True)
-        for dirname, _subdirs, files in os.walk(buildroot):
+        for dirname, dummy_subdirs, files in os.walk(buildroot):
             dirname = dirname[buildrootlen:]
             chapter = 'other'
             for replacer in sortedreplacers:
@@ -629,7 +666,7 @@ class PythonModule(dict):
         if not 'spec' in self:
             self.generate_spec()
         buildroot = self.buildroot()
-        out, _err = subprocess.Popen(['rpmspec', '--query', self['spec']], stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
+        out, dummy_err = subprocess.Popen(['rpmspec', '--query', self['spec']], stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
         rpmlist = out.splitlines()
         if len(rpmlist):
             done = True
@@ -678,7 +715,7 @@ class PythonModule(dict):
             pass
 
 def rpmvalue(key):
-    out, _err = subprocess.Popen(['rpm', '-E', key], stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
+    out, dummy_err = subprocess.Popen(['rpm', '-E', key], stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
     return out.decode().strip()
 
 class VersionException(Exception):
