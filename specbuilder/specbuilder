@@ -7,7 +7,7 @@ import os
 import re
 from datetime import datetime
 import argparse
-import subprocess
+from subprocess import Popen, check_call, PIPE, CalledProcessError
 import traceback
 import json
 import tarfile
@@ -46,6 +46,9 @@ def writesetupconfig(**kwargs):
     with open('{0}','w') as f:
         f.write(json.dumps(setupconfig))
 '''
+
+__rpmmacros__ = ['%{python3_sitelib}', '%{python3_sitearch}', '%{python_sitelib}',
+                 '%{python_sitearch}', '%{_bindir}', '%{_libdir}']
 
 class PythonModuleException(Exception):
     '''
@@ -204,9 +207,9 @@ class PythonModule(dict):
         if not doap:
             self.print_msg(1, 'Downloading doap record')
             if 'version' in self:
-                url="https://pypi.python.org/pypi/{0}/{1}/json".format(self.modulename, self['version'])
+                url = "https://pypi.python.org/pypi/{0}/{1}/json".format(self.modulename, self['version'])
             else:
-                url="https://pypi.python.org/pypi/{0}/json".format(self.modulename)
+                url = "https://pypi.python.org/pypi/{0}/json".format(self.modulename)
             self['doapurl'] = url
             handler = urlopen(url)
             doap = self['doap'] = json.loads(handler.read().decode('utf-8'))
@@ -217,9 +220,9 @@ class PythonModule(dict):
         This method downloads the source package for a specific version of a specific module.
         '''
         try:
-            sourcepath=self['sourcepath']
+            sourcepath = self['sourcepath']
         except KeyError:
-            sourcepath=None
+            sourcepath = None
         if not sourcepath:
             url = self.downloadpage()
             source = self['source'] = os.path.basename(url)
@@ -271,9 +274,8 @@ class PythonModule(dict):
         extractedpath = self.extract_source()
         setupconfigfilepath = '{0}/writesetupconfig.py'.format(extractedpath)
         setupconfigjsonpath = '{0}/writesetupconfig.json'.format(extractedpath)
-        import_res = []
-        import_res.append(r'from\s+(setuptools|distutils.core)\s+import\s.*setup(,|$)')
-        import_res.append(r'import\s+(setuptools|distutils.core)')
+        import_res = [r'from\s+(setuptools|distutils.core)\s+import\s.*setup(,|$)',
+                      r'import\s+(setuptools|distutils.core)']
         re_setupimport = re.compile(r'^(\s*)({})'.format('|'.join(import_res)))
 
         if not os.path.exists(setupconfigfilepath):
@@ -306,13 +308,13 @@ class PythonModule(dict):
 
         if not os.path.exists(setupconfigjsonpath):
             self.print_msg(2, 'Running writesetupconfig.py')
-            writer = subprocess.Popen([sys.executable, setupconfigfilepath], cwd=extractedpath)
+            writer = Popen([sys.executable, setupconfigfilepath], cwd=extractedpath)
             writer.wait()
 
         if 'setupconfig' not in self:
             self.print_msg(3, 'Reading setupconfig.json')
             setupconfig = open(setupconfigjsonpath).read()
-            if not len(setupconfig):
+            if not setupconfig:
                 raise PythonModuleException('Error getting setupconfig for {0} - {1}. {2} contains no data...'.format(self.modulename, self.latest_version(), setupconfigjsonpath))
             self['setupconfig'] = json.loads(open(setupconfigjsonpath).read())
         return self['setupconfig']
@@ -594,26 +596,43 @@ class PythonModule(dict):
         return sourceurl
 
     def release(self):
+        '''
+        This method uses the value set for `self['release']`` and converts it into
+        the actual value with `rpm -E` and returns that as the actual result.
+        '''
         return rpmvalue(self['release'])
 
     def arch(self):
+        '''
+        This method returns `self['buildarch']` when set and 'noarch' when not set.
+        '''
         try:
             return self['buildarch']
         except KeyError:
             return 'noarch'
 
     def buildroot(self):
+        '''
+        This method returns the location of the buildroot, which defaults to
+        '~/rpmbuild/BUILDROOT/{self.modulename}-{self.latest_version()}.{self.arch()}'
+        when not set.
+        '''
         try:
             return self['buildroot']
         except KeyError:
-            return os.path.expanduser('~/rpmbuild/BUILDROOT/{0}-{1}.{2}'.format(self.modulename, self.latest_version(), self.arch()))
+            path = '{0}-{1}.{2}'.format(self.modulename, self.latest_version(), self.arch())
+            path = os.path.expanduser('~/rpmbuild/BUILDROOT/' + path)
+            return path
 
     def createbuildfilelist(self):
+        '''
+        This method creates a list of files to be included in the %files chapter of the spec file.
+        '''
         buildroot = self.buildroot()
         buildrootlen = len(buildroot)
         buildfilelist = dict()
         replacers = {}
-        for rpmval in ['%{python3_sitelib}', '%{python3_sitearch}', '%{python_sitelib}', '%{python_sitearch}', '%{_bindir}', '%{_libdir}']:
+        for rpmval in __rpmmacros__:
             path = rpmvalue(rpmval)
             replacers[path] = rpmval
         sortedreplacers = sorted(replacers.keys(), key=len, reverse=True)
@@ -652,23 +671,27 @@ class PythonModule(dict):
         else:
             for key in newkeys:
                 #find elements in one, but not the other
-                if len(buildfilesublist[key] ^ self['buildfilelist'][key]) > 0:
+                if buildfilesublist[key] ^ self['buildfilelist'][key] > 0:
                     changed = True
         if changed:
             self['buildfilelist'] = buildfilelist
         return changed
 
     def build(self):
+        '''
+        This method is used to build the rpm from the spec file.
+        '''
         if not self.check_python_version():
             self.print_msg(1, 'Not building spec, because module not fit for this python version.')
             return
 
-        if not 'spec' in self:
+        if 'spec' not in self:
             self.generate_spec()
         buildroot = self.buildroot()
-        out, dummy_err = subprocess.Popen(['rpmspec', '--query', self['spec']], stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
+        cmd = ['rpmspec', '--query', self['spec']]
+        out, dummy_err = Popen(cmd, stdout=PIPE, stderr=PIPE).communicate()
         rpmlist = out.splitlines()
-        if len(rpmlist):
+        if rpmlist:
             done = True
             for rpm in rpmlist:
                 rpmfile = os.path.expanduser('~/rpmbuild/RPMS/noarch/{0}.rpm'.format(rpm))
@@ -688,25 +711,32 @@ class PythonModule(dict):
             redirect = open(os.devnull, 'w')
         for stage in ['p', 'c', 'i', 'l', 'a']:
             try:
-                subprocess.check_call(['rpmbuild', '--short-circuit', '--buildroot={0}'.format(buildroot), '-b'+stage, self['spec']], stdout=redirect, stderr=redirect)
+                cmd = ['rpmbuild', '--short-circuit', '--buildroot='+buildroot,
+                       '-b'+stage, self['spec']]
+                check_call(cmd, stdout=redirect, stderr=redirect)
                 if stage == 'a':
                     self.print_msg(0, 'Building rpm succesfully finished.')
-            except subprocess.CalledProcessError:
+            except CalledProcessError:
                 if stage == 'i':
                     corrected = False
-                    #In this stage, two things might be the issue: The architecture could be other than noarch and the %files section could be off.
+                    #In this stage, two things might be the issue:
+                    # 1: The architecture could be other than noarch
+                    # 2: the %files section could be off.
                     corrected = self.createbuildfilelist()
-                    if os.path.exists(os.path.join(buildroot, 'usr/lib64')) and self['spec_generated'] and self.arch() == 'noarch':
+                    if os.path.exists(os.path.join(buildroot, 'usr/lib64')) and \
+                       self['spec_generated'] and self.arch() == 'noarch':
                         self['buildarch'] = 'x86_64'
                         corrected = True
                     if not corrected:
-                        raise PythonModuleException('Building RPM Failed (no architecture change and no filelist change).')
+                        raise PythonModuleException('RPM build failed. Arch & filelist unchanged.')
                     os.unlink(self['spec'])
                     self.generate_spec()
                     try:
-                        subprocess.check_call(['rpmbuild', '--buildroot={0}'.format(buildroot), '-bi', self['spec']], stdout=redirect, stderr=redirect)
+                        cmd = ['rpmbuild', '--buildroot={0}'.format(buildroot), '-bi',
+                               self['spec']]
+                        check_call(cmd, stdout=redirect, stderr=redirect)
                     except:
-                        raise PythonModuleException('Building RPM Failed (even after architecture change and/or filelist change).')
+                        raise PythonModuleException('RPM build failed Arch / filelist changed.')
                 else:
                     raise PythonModuleException('Building rpm FAILED in stage {}.'.format(stage))
         try:
@@ -715,7 +745,10 @@ class PythonModule(dict):
             pass
 
 def rpmvalue(key):
-    out, dummy_err = subprocess.Popen(['rpm', '-E', key], stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
+    '''
+    This function will call rpm -E to evaluate rpm macros and return the result.
+    '''
+    out, dummy_err = Popen(['rpm', '-E', key], stdout=PIPE, stderr=PIPE).communicate()
     return out.decode().strip()
 
 class VersionException(Exception):
@@ -775,28 +808,31 @@ class VersionClass(str):
 
     def cmp(self, other):
         '''
-        VersionClass.cmp() compares the version passed (other) to the version owning this
-        cmp function (self) and returns 1 if other is bigger, -1 if self is bigger and 0 if they are equal.
+        VersionClass.cmp() compares the VersionClass object passed (other) to the VersionClass
+        object owning this cmp function (self) and returns 1 if other is bigger,
+        -1 if self is bigger, and 0 if they are equal.
         '''
         try:
-            myParts = self.split()
-            hisParts = other.split()
+            myparts = self.split()
+            hisparts = other.split()
         except:
-            raise VersionException('''Seems {0} is'n a valuable component to compare to {1}'''.format(other.__repr__(), self.__repr__()))
+            msg = '''Seems {0} is'n a valuable component to compare to {1}'''
+            msg = msg.format(other.__repr__(), self.__repr__())
+            raise VersionException(msg)
         ret = 0
-        for i in range(max(len(myParts), len(hisParts))):
+        for i in range(max(len(myparts), len(hisparts))):
             try:
-                mine = myParts[i]
+                mine = myparts[i]
             except IndexError:
                 ret = 1
                 break
             try:
-                his = hisParts[i]
+                his = hisparts[i]
             except IndexError:
                 ret = -1
                 break
             mineisstr = isinstance(mine, str)
-            hisisstr  = isinstance(his, str)
+            hisisstr = isinstance(his, str)
             if mineisstr and not hisisstr:
                 ret = 1
                 break
@@ -813,12 +849,14 @@ class VersionClass(str):
 
     def split(self):
         '''
-        VersionClass.split() is used to convert a string version like '1.0.1b' into a tuple like (1, 0, 1, 'b').
+        VersionClass.split() is used to convert a string version like '1.0.1b' into a tuple
+        like (1, 0, 1, 'b').
         '''
-        if not len(self):
+        if not self:
             self.parts = tuple()
         elif not self.parts:
-            #Look at https://fedoraproject.org/wiki/Archive:Tools/RPM/VersionComparison for more info
+            #Look at https://fedoraproject.org/wiki/Archive:Tools/RPM/VersionComparison
+            #for more info
             letter, digit, other = 'l', 'd', 'o'
             parts = []
             previous_type = None
@@ -831,7 +869,7 @@ class VersionClass(str):
                     c_type = other
                 if not previous_type:
                     #Processing first character
-                    if c_type in [ letter, digit ]:
+                    if c_type in [letter, digit]:
                         part = char
                     else:
                         #Seems to be that first character is not digit or letter.
@@ -867,33 +905,40 @@ class VersionClass(str):
         return self.parts
 
 def description_sanitizer(desc):
-    desc=desc.encode('ascii', 'ignore').decode()
+    '''
+    This function is used to cleanup description texts from python modules.
+    '''
+    desc = desc.encode('ascii', 'ignore').decode()
     tag_re = re.compile(':[a-z]+:')
     empty_re = re.compile(r'^\s*$')
     empty_count = 0
     ret = []
-    for l in desc.split('\n'):
-        if '-----' in l:
+    for line in desc.split('\n'):
+        if '-----' in line:
             ret = ret[:-1]
             break
-        elif '>>>' in l:
+        elif '>>>' in line:
             pass
-        elif '===' in l:
+        elif '===' in line:
             pass
-        elif '::' in l:
+        elif '::' in line:
             pass
-        elif tag_re.search(l):
+        elif tag_re.search(line):
             pass
-        elif empty_re.search(l):
+        elif empty_re.search(line):
             empty_count += 1
             if empty_count == 1:
-                ret.append(l)
+                ret.append(line)
         else:
             empty_count = 0
-            ret.append(l)
+            ret.append(line)
     return '\n'.join(ret)
 
-def download_modules_recursive(packages, args=None, recursive = False):
+def download_modules_recursive(packages, args=None, recursive=False):
+    '''
+    This helper function is used to recurse into a list of packages and download them,
+    and their dependencies and so on. This function is recursive (calling himselve).
+    '''
     args = args or {}
     try:
         verbosity = args['verbosity']
@@ -920,50 +965,60 @@ def download_modules_recursive(packages, args=None, recursive = False):
                 for submodinfo in mod.requires():
                     if submodinfo[0] in args['skip_builds']:
                         if args['verbosity'] > 3:
-                            print('    Skippping {} because it is disabled in switchfile.'.format(submodinfo[0]))
+                            print('    Skippping {}. Disabled in switchfile.'.format(submodinfo[0]))
                         continue
                     try:
-                        mods = download_modules_recursive(packages = [submodinfo], args = args, recursive = recursive)
+                        mods = download_modules_recursive(packages=[submodinfo],
+                                                          args=args, recursive=recursive)
                         for k in mods:
                             ret[k] = mods[k]
                     except Exception:
-                        print ('Exception occurred while retrieving info on module {}'.format(submodinfo[0]))
+                        print('Exception occurred while retrieving info on module '+submodinfo[0])
                         exc_type, exc_value, exc_traceback = sys.exc_info()
                         fname = os.path.split(exc_traceback.tb_frame.f_code.co_filename)[1]
                         print(exc_type, fname, exc_traceback.tb_lineno, exc_value)
-                        traceback.print_exception(exc_type, exc_value, exc_traceback, limit=(verbosity*3+1))
+                        traceback.print_exception(exc_type, exc_value, exc_traceback,
+                                                  limit=(verbosity*3+1))
         if moduleversion:
             mod.addversionlimit(moduleversion)
     return ret
 
 def main():
     parser = argparse.ArgumentParser(description='Generate a spec file for a python module')
-    parser.add_argument('-p', '--package', required=True, action='append', help='The python package to generate a spec for. You can add it multiple times.')
-    parser.add_argument('-V', '--version', action='append', help='The version of the module to build a spec for')
-    parser.add_argument('-v', '--verbose', action='count', help='The verbosity level (add multiple times for more verbosity)')
-    parser.add_argument('-t', '--template', default='./templates/spec.jinja2', help='The jinja2 template to use')
-    parser.add_argument('-n', '--buildername', default='J. Doe', help='The name of the person who is building')
-    parser.add_argument('-e', '--buildermail', default='jdoe@example.com', help='The jinja2 template to use')
+    parser.add_argument('-p', '--package', required=True, action='append',
+                        help='The python package to build. Can be specified multiple times.')
+    parser.add_argument('-V', '--version', action='append',
+                        help='The version of the module to build a spec for')
+    parser.add_argument('-v', '--verbose', action='count',
+                        help='The verbosity level (add multiple times for more verbosity)')
+    parser.add_argument('-t', '--template', default='./templates/spec.jinja2',
+                        help='The jinja2 template to use')
+    parser.add_argument('-n', '--buildername', default='J. Doe',
+                        help='The name of the person who is building')
+    parser.add_argument('-e', '--buildermail', default='jdoe@example.com',
+                        help='The jinja2 template to use')
     parser.add_argument('-b', '--build', action='store_true', help='Actually try to build the rpm')
-    parser.add_argument('-r', '--recursive', action='store_true', help='Also build rpms this module depends on')
-    parser.add_argument('-s', '--switchfile', help='File for switches (this controls the requires to add)')
+    parser.add_argument('-r', '--recursive', action='store_true',
+                        help='Also build rpms this module depends on')
+    parser.add_argument('-s', '--switchfile',
+                        help='File for switches (this controls the requires to add)')
 
     options = parser.parse_args()
 
-    for subdir in [ 'SPECS', 'SOURCES' ]:
-        d = os.path.expanduser(os.path.join('~/rpmbuild', subdir))
-        if not os.path.exists(d):
-            os.makedirs(d, mode=0o750)
+    for subdir in ['SPECS', 'SOURCES']:
+        dirname = os.path.expanduser(os.path.join('~/rpmbuild', subdir))
+        if not os.path.exists(dirname):
+            os.makedirs(dirname, mode=0o750)
 
     if options.buildername:
         buildername = options.buildername
     else:
-        fullname=options.buildermail.split('@')[0]
+        fullname = options.buildermail.split('@')[0]
         if '.' in fullname:
             names = fullname.split('.')
         else:
-            names = [ fullname[0], fullname[1:] ]
-        buildername = '. '.join([ name.capitalize() for name in names ])
+            names = [fullname[0], fullname[1:]]
+        buildername = '. '.join([name.capitalize() for name in names])
 
     template = os.path.abspath(os.path.expanduser(options.template))
 
@@ -978,7 +1033,8 @@ def main():
             except Exception:
                 switches = json.loads(open(options.switchfile).read())
 
-    modargs = { 'buildername': buildername, 'buildermail': options.buildermail, 'template': template, 'verbosity': options.verbose }
+    modargs = {'buildername': buildername, 'buildermail': options.buildermail,
+               'template': template, 'verbosity': options.verbose}
     for chapter in ['extra_requires', 'skip_builds', 'require_chapters']:
         if chapter not in switches:
             switches[chapter] = {}
@@ -1026,7 +1082,7 @@ def main():
     if options.switchfile:
         if options.verbose > 0:
             print('Writing switchfile {}'.format(options.switchfile))
-        open(options.switchfile, 'w').write(yaml.dump(switches, default_flow_style=False ))
+        open(options.switchfile, 'w').write(yaml.dump(switches, default_flow_style=False))
     sys.exit(len(builderrors) + len(specerrors))
 
 if __name__ == "__main__":

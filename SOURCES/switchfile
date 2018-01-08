@@ -1,3 +1,4 @@
+extra_requires: {}
 require_chapters:
   :(python_version<"3.3"): false
   :platform_python_implementation != 'PyPy': true
@@ -61,5 +62,5 @@ require_chapters:
   testing: false
   tests_require: false
   websupport: true
-skip_builds: {}
-extra_requires: {}
+skip_builds:
+- setuptools
