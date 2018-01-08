@@ -1,6 +1,6 @@
 FROM centos:7
 RUN yum -y install epel-release
 RUN yum -y install https://download.postgresql.org/pub/repos/yum/9.6/redhat/rhel-6-x86_64/pgdg-centos96-9.6-3.noarch.rpm
-RUN yum -y install git rpm-build  python34 golang python34-pip gcc-c++ python34-devel sudo make which libffi psycopg2 openssl-devel libffi-devel libxml2-devel libxslt-devel postgresql96-server postgresql96-devel
+RUN yum -y install git rpm-build  python34 golang python34-pip gcc-c++ python34-devel sudo make which libffi psycopg2 openssl-devel libffi-devel libxml2-devel libxslt-devel postgresql96-server postgresql96-devel snappy-devel
 RUN pip3 install --upgrade pip virtualenv
 RUN mkdir -p ~/rpmbuild/SOURCES
